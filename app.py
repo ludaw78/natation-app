@@ -88,7 +88,8 @@ else:
     df_table['Date'] = df_table['Date'].dt.date
 
     st.subheader(f"Performances pour {nage_choisie} ({bassin})")
-    st.dataframe(df_table[["Date", "Temps", "Âge", "Points", "Ville", "Catégorie", "Club"]])
+    st.dataframe(df_table[["Date", "Temps", "Âge", "Points", "Ville", "Catégorie", "Club"]],
+    hide_index=True)
 
     # ---- Graphique progression ----
        
