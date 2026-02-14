@@ -6,18 +6,12 @@ import plotly.express as px
 import numpy as np
 import math
 from datetime import datetime
-import uuid # Pour générer un identifiant unique à chaque rafraîchissement
 
-# Configuration de la page
 st.set_page_config(page_title="Performances Tristan", layout="wide")
 
 # =========================
-# FORÇAGE ANTI-CACHE (CACHE BUSTING)
+# Navigation & État
 # =========================
-# On génère un ID totalement nouveau à chaque exécution du script
-if "unique_run_id" not in st.session_state:
-    st.session_state.unique_run_id = str(uuid.uuid4())
-
 if "page" not in st.session_state:
     st.session_state.page = "home"
 if "bassin" not in st.session_state:
@@ -27,32 +21,29 @@ if "nage" not in st.session_state:
 
 def update_bassin():
     st.session_state.bassin = st.session_state.bassin_radio
-    # On change l'ID au changement de bassin pour forcer le refresh des composants
-    st.session_state.unique_run_id = str(uuid.uuid4())
 
-# =========================
-# CSS
-# =========================
-st.markdown(f"""
+# CSS (Boutons verts + Forçage colonnes mobiles)
+st.markdown("""
 <style>
-/* On utilise l'ID unique dans le CSS pour forcer le re-rendu */
-div.stButton > button {{
+div.stButton > button {
     width: 100% !important;
-    height: 50px !important;
+    height: 45px !important;
     background-color: #4CAF50 !important;
     color: white !important;
-    border-radius: 10px !important;
-    border: none !important;
+    border-radius: 8px !important;
     font-weight: bold !important;
-}}
-div.stButton > button p {{ color: white !important; }}
-.small-font {{ font-size:12px !important; color: gray; font-style: italic; text-align: center; }}
+    margin-bottom: 5px !important;
+}
+.small-font { font-size:11px !important; color: gray; font-style: italic; text-align: center; }
+/* Empêcher Streamlit d'empiler les colonnes sur mobile */
+[data-testid="column"] {
+    min-width: 30% !important;
+    flex: 1 1 30% !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# =========================
-# SCRAPING (SANS CACHE)
-# =========================
+@st.cache_data(ttl=600) # Cache de 10 min seulement
 def load_all_data():
     idrch_id = "3518107"
     results = []
@@ -66,9 +57,9 @@ def load_all_data():
             pattern = re.compile(r'<tr[^>]*>.*?<th[^>]*>([^<]+)</th>.*?<td[^>]*font-bold[^>]*>(?:<button[^>]*>)?(?:<a[^>]*>)?\s*([\d:.]+)\s*(?:</a>)?(?:</button>)?</td>.*?<td[^>]*>\(([^)]+)\)</td>.*?<td[^>]*italic[^>]*>([^<]+)</td>.*?<p>([A-ZÀ-ÿ\s-]+)</p>\s*<p>\(([A-Z]+)\)</p>.*?<td[^>]*>(\d{2}/\d{2}/\d{4})</td>.*?<td[^>]*>(\[[^\]]+\])</td>.*?href="([^"]*resultats\.php[^"]*)".*?</td>\s*<td[^>]*>([^<]+)</td>', re.DOTALL)
             matches = pattern.findall(html)
             for m in matches:
-                # Nettoyage des noms pour éviter les bugs de caractères invisibles
-                clean_name = " ".join(m[0].split())
-                results.append([clean_name] + list(m[1:]) + [b_label])
+                # Nettoyage profond du nom de l'épreuve
+                name = re.sub(r'[^a-zA-Z0-9\.\s]', '', m[0]).strip()
+                results.append([name] + list(m[1:]) + [b_label])
         except: continue
     
     df = pd.DataFrame(results, columns=["Épreuve", "Temps", "Âge", "Points", "Ville", "Code pays", "Date", "Catégorie", "Lien résultats", "Club", "Bassin_Type"])
@@ -80,46 +71,56 @@ def load_all_data():
 full_df, last_sync = load_all_data()
 df_current = full_df[full_df["Bassin_Type"] == st.session_state.bassin]
 
-# --- PAGE ACCUEIL ---
+# --- ACCUEIL ---
 if st.session_state.page == "home":
     st.title("Performances Tristan 🏊‍♂️")
-    
-    # On ajoute l'ID unique au widget pour forcer son actualisation
-    st.radio("Bassin", ["25m", "50m"], 
-             index=["25m","50m"].index(st.session_state.bassin), 
-             horizontal=True, key="bassin_radio", on_change=update_bassin)
+    st.radio("Bassin", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), horizontal=True, key="bassin_radio", on_change=update_bassin)
 
-    if df_current.empty:
-        st.warning("Aucune donnée disponible.")
-    else:
-        # Onglets avec clés uniques
-        tab_list = ["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"]
-        tabs = st.tabs(tab_list)
-        filters = {"Nage Libre": ["NL"], "Brasse": ["BRA."], "Papillon": ["PAP."], "Dos": ["DOS"], "4 Nages": ["4 N."]}
+    if not df_current.empty:
+        tab_labels = ["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"]
+        tabs = st.tabs(tab_labels)
+        filters = {"Nage Libre": "NL", "Brasse": "BRA.", "Papillon": "PAP.", "Dos": "DOS", "4 Nages": "4 N."}
         
-        all_epreuves = df_current["Épreuve"].unique().tolist()
-        
-        for i, label in enumerate(tab_list):
+        all_names = df_current["Épreuve"].unique()
+
+        for i, label in enumerate(tab_labels):
             with tabs[i]:
-                # Filtrage
-                matches = [e for e in all_epreuves if any(f.upper() in e.upper() for f in filters[label])]
+                tag = filters[label]
+                # Sélectionner les épreuves qui contiennent le tag (ex: "NL")
+                matches = [n for n in all_names if tag in n.upper()]
                 
-                # TRI NUMÉRIQUE STRICT
-                # On extrait uniquement les chiffres pour le tri (ex: "400 NL" -> 400)
-                matches.sort(key=lambda x: int(''.join(filter(str.isdigit, x))) if any(c.isdigit() for c in x) else 0)
-                
-                if not matches:
-                    st.info("Aucune épreuve trouvée.")
-                else:
-                    cols = st.columns(3)
-                    for j, epreuve in enumerate(matches):
-                        # LA CLÉ EST LA PLUS IMPORTANTE : elle contient l'ID unique de session
-                        # Cela force le navigateur à recréer le bouton au lieu de charger l'ancien
-                        unique_key = f"btn_{epreuve}_{st.session_state.unique_run_id}_{i}_{j}"
-                        if cols[j % 3].button(epreuve, key=unique_key):
-                            st.session_state.nage = epreuve
-                            st.session_state.page = "perf"
-                            st.rerun()
+                # TRI MATHÉMATIQUE PUR SUR LA DISTANCE
+                # On extrait tous les chiffres et on transforme en entier pour comparer
+                matches = sorted(matches, key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
 
+                if matches:
+                    # On utilise une boucle pour créer des lignes de 3 colonnes
+                    for j in range(0, len(matches), 3):
+                        row_matches = matches[j:j+3]
+                        cols = st.columns(3)
+                        for idx, epreuve in enumerate(row_matches):
+                            if cols[idx].button(epreuve, key=f"btn_{epreuve}_{st.session_state.bassin}"):
+                                st.session_state.nage = epreuve
+                                st.session_state.page = "perf"
+                                st.rerun()
+    
     st.markdown("---")
     st.markdown(f'<p class="small-font">Dernière mise à jour FFN : {last_sync}</p>', unsafe_allow_html=True)
+
+# --- PERFORMANCE ---
+elif st.session_state.page == "perf":
+    if st.button("⬅ Retour"):
+        st.session_state.page = "home"
+        st.rerun()
+
+    nage_choisie = st.session_state.nage
+    df_nage = df_current[df_current["Épreuve"] == nage_choisie].sort_values("Date", ascending=False)
+    st.title(f"{nage_choisie}")
+
+    if not df_nage.empty:
+        st.dataframe(df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]], use_container_width=True)
+        
+        df_graph = df_nage.sort_values("Date")
+        fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Progression")
+        fig.update_traces(mode="lines+markers", marker=dict(color="#4CAF50"))
+        st.plotly_chart(fig, use_container_width=True)
