@@ -22,28 +22,38 @@ if "nage" not in st.session_state:
 def update_bassin():
     st.session_state.bassin = st.session_state.bassin_radio
 
-# CSS (Boutons verts + Forçage colonnes mobiles)
+# =========================
+# CSS : GRILLE 3 COLONNES FIXE
+# =========================
 st.markdown("""
 <style>
+/* Style des boutons verts */
 div.stButton > button {
     width: 100% !important;
-    height: 45px !important;
+    height: 50px !important;
     background-color: #4CAF50 !important;
     color: white !important;
-    border-radius: 8px !important;
+    border-radius: 10px !important;
+    border: none !important;
     font-weight: bold !important;
-    margin-bottom: 5px !important;
 }
-.small-font { font-size:11px !important; color: gray; font-style: italic; text-align: center; }
-/* Empêcher Streamlit d'empiler les colonnes sur mobile */
+div.stButton > button p { color: white !important; }
+
+/* FORCE L'AFFICHAGE EN COLONNES MÊME SUR MOBILE */
 [data-testid="column"] {
-    min-width: 30% !important;
-    flex: 1 1 30% !important;
+    width: 32% !important;
+    flex: 1 1 32% !important;
+    min-width: 32% !important;
 }
+
+.small-font { font-size:12px !important; color: gray; font-style: italic; text-align: center; }
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=600) # Cache de 10 min seulement
+# =========================
+# SCRAPING
+# =========================
+@st.cache_data(ttl=600)
 def load_all_data():
     idrch_id = "3518107"
     results = []
@@ -54,10 +64,11 @@ def load_all_data():
         try:
             response = requests.get(url, timeout=10)
             html = response.text
+            pattern = re.compile(r'<tr[^>]*>.*?<th[^>]*>([^<]+)</th>.*?<td[^>]*font-bold[^>]*>(?:<button[^>]*>)?(?:<a[^>]*>)?\s*([\d:.]+)\s*(?:</a>)?(?:</button>)?</td>.*?<td[^>]*>\(([^)]+)\)</td>.*?<td[^>]*italic[^>]*>([^<]+)</td>.*?<p>([A-ZÀ-ÿ\s-]+)</p>\s*<p>\(([A-Z]+)\)</p>.*?<td[^>]*>(\dots*)', re.DOTALL) # Simplifié pour l'exemple
+            # Note: J'utilise ici ta logique de regex complète habituelle
             pattern = re.compile(r'<tr[^>]*>.*?<th[^>]*>([^<]+)</th>.*?<td[^>]*font-bold[^>]*>(?:<button[^>]*>)?(?:<a[^>]*>)?\s*([\d:.]+)\s*(?:</a>)?(?:</button>)?</td>.*?<td[^>]*>\(([^)]+)\)</td>.*?<td[^>]*italic[^>]*>([^<]+)</td>.*?<p>([A-ZÀ-ÿ\s-]+)</p>\s*<p>\(([A-Z]+)\)</p>.*?<td[^>]*>(\d{2}/\d{2}/\d{4})</td>.*?<td[^>]*>(\[[^\]]+\])</td>.*?href="([^"]*resultats\.php[^"]*)".*?</td>\s*<td[^>]*>([^<]+)</td>', re.DOTALL)
             matches = pattern.findall(html)
             for m in matches:
-                # Nettoyage profond du nom de l'épreuve
                 name = re.sub(r'[^a-zA-Z0-9\.\s]', '', m[0]).strip()
                 results.append([name] + list(m[1:]) + [b_label])
         except: continue
@@ -71,55 +82,51 @@ def load_all_data():
 full_df, last_sync = load_all_data()
 df_current = full_df[full_df["Bassin_Type"] == st.session_state.bassin]
 
-# --- ACCUEIL ---
+# --- PAGE ACCUEIL ---
 if st.session_state.page == "home":
     st.title("Performances Tristan 🏊‍♂️")
     st.radio("Bassin", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), horizontal=True, key="bassin_radio", on_change=update_bassin)
 
     if not df_current.empty:
-        tab_labels = ["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"]
-        tabs = st.tabs(tab_labels)
+        tab_list = ["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"]
+        tabs = st.tabs(tab_list)
         filters = {"Nage Libre": "NL", "Brasse": "BRA.", "Papillon": "PAP.", "Dos": "DOS", "4 Nages": "4 N."}
         
         all_names = df_current["Épreuve"].unique()
 
-        for i, label in enumerate(tab_labels):
+        for i, label in enumerate(tab_list):
             with tabs[i]:
                 tag = filters[label]
-                # Sélectionner les épreuves qui contiennent le tag (ex: "NL")
                 matches = [n for n in all_names if tag in n.upper()]
-                
-                # TRI MATHÉMATIQUE PUR SUR LA DISTANCE
-                # On extrait tous les chiffres et on transforme en entier pour comparer
+                # TRI NUMÉRIQUE (50, 100, 200...)
                 matches = sorted(matches, key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
 
                 if matches:
-                    # On utilise une boucle pour créer des lignes de 3 colonnes
+                    # Affichage par lignes de 3 colonnes
                     for j in range(0, len(matches), 3):
                         row_matches = matches[j:j+3]
                         cols = st.columns(3)
                         for idx, epreuve in enumerate(row_matches):
-                            if cols[idx].button(epreuve, key=f"btn_{epreuve}_{st.session_state.bassin}"):
+                            if cols[idx].button(epreuve, key=f"btn_{epreuve}_{i}_{j}_{idx}"):
                                 st.session_state.nage = epreuve
                                 st.session_state.page = "perf"
                                 st.rerun()
-    
+
     st.markdown("---")
     st.markdown(f'<p class="small-font">Dernière mise à jour FFN : {last_sync}</p>', unsafe_allow_html=True)
 
-# --- PERFORMANCE ---
+# --- PAGE PERFORMANCE ---
 elif st.session_state.page == "perf":
     if st.button("⬅ Retour"):
         st.session_state.page = "home"
         st.rerun()
-
+    
     nage_choisie = st.session_state.nage
     df_nage = df_current[df_current["Épreuve"] == nage_choisie].sort_values("Date", ascending=False)
     st.title(f"{nage_choisie}")
 
     if not df_nage.empty:
         st.dataframe(df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]], use_container_width=True)
-        
         df_graph = df_nage.sort_values("Date")
         fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Progression")
         fig.update_traces(mode="lines+markers", marker=dict(color="#4CAF50"))
