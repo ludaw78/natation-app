@@ -99,21 +99,23 @@ if st.session_state.page == "home":
         
         all_epreuves = df_current["Épreuve"].unique().tolist()
         
-        def extract_dist(text):
-            m = re.search(r"(\d+)", text)
-            return int(m.group(1)) if m else 0
+        # Fonction de tri robuste : extrait TOUS les chiffres et les transforme en nombre
+        def extract_dist_robust(text):
+            digits = "".join(filter(str.isdigit, text))
+            return int(digits) if digits else 9999
 
         for i, label in enumerate(tab_list):
             with tabs[i]:
-                # Filtrer et surtout TRIER numériquement ici
-                matches = [e for e in all_epreuves if any(f.upper() in e.upper() for f in filters[label])]
-                matches.sort(key=extract_dist) # TRI CRUCIAL ICI
+                # Filtrage strict
+                cat_matches = [e for e in all_epreuves if any(f.upper() in e.upper() for f in filters[label])]
+                # Tri forcé par la valeur numérique de la distance
+                cat_matches = sorted(cat_matches, key=extract_dist_robust)
                 
-                if not matches:
+                if not cat_matches:
                     st.info("Aucune épreuve trouvée.")
                 else:
                     cols = st.columns(3)
-                    for j, epreuve in enumerate(matches):
+                    for j, epreuve in enumerate(cat_matches):
                         cols[j % 3].button(epreuve, key=f"btn_{epreuve}", on_click=lambda e=epreuve: st.session_state.update({"nage": e, "page": "perf"}), use_container_width=True)
 
     st.markdown("---")
