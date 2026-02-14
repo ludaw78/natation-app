@@ -4,7 +4,6 @@ import requests
 import re
 import plotly.express as px
 import numpy as np
-import math
 from datetime import datetime
 
 st.set_page_config(page_title="Performances Tristan", layout="wide")
@@ -20,14 +19,15 @@ if "nage" not in st.session_state:
     st.session_state.nage = None
 
 def update_bassin():
+    # Cette fonction est appelée par le sélecteur radio
     st.session_state.bassin = st.session_state.bassin_radio
 
 # =========================
-# CSS : FLEXBOX FLUIDE + BOUTONS
+# CSS : FLEXBOX FLUIDE & BOUTONS
 # =========================
 st.markdown("""
 <style>
-/* Style des boutons originaux */
+/* Style des boutons */
 div.stButton > button {
     width: auto !important;
     min-width: 90px !important;
@@ -40,10 +40,10 @@ div.stButton > button {
     padding: 0 15px !important;
 }
 
-/* LE FIX ULTIME POUR L'ALIGNEMENT HORIZONTAL FLUIDE */
+/* FIX ALIGNEMENT HORIZONTAL FLUIDE */
 [data-testid="stHorizontalBlock"] {
     display: flex !important;
-    flex-flow: row wrap !important; /* Force la ligne et permet le saut de ligne */
+    flex-flow: row wrap !important;
     justify-content: flex-start !important;
     gap: 10px !important;
 }
@@ -83,12 +83,14 @@ def load_all_data():
     return df, sync_time
 
 full_df, last_sync = load_all_data()
-df_current = full_df[full_df["Bassin_Type"] == st.session_state.bassin]
 
 # --- PAGE ACCUEIL ---
 if st.session_state.page == "home":
     st.title("Performances Tristan 🏊‍♂️")
-    st.radio("Bassin", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), horizontal=True, key="bassin_radio", on_change=update_bassin)
+    st.radio("Bassin", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), 
+             horizontal=True, key="bassin_radio", on_change=update_bassin)
+
+    df_current = full_df[full_df["Bassin_Type"] == st.session_state.bassin]
 
     if not df_current.empty:
         tab_list = ["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"]
@@ -101,7 +103,6 @@ if st.session_state.page == "home":
             with tabs[i]:
                 tag = filters[label]
                 matches = [n for n in all_names if tag in n.upper()]
-                # Tri numérique (50, 100, 200...)
                 matches = sorted(matches, key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
 
                 if matches:
@@ -118,19 +119,26 @@ if st.session_state.page == "home":
 
 # --- PAGE PERFORMANCE ---
 elif st.session_state.page == "perf":
-    if st.button("⬅ Retour"):
-        st.session_state.page = "home"
-        st.rerun()
+    col_back, col_bassin = st.columns([1, 2])
+    with col_back:
+        if st.button("⬅ Retour"):
+            st.session_state.page = "home"
+            st.rerun()
+    with col_bassin:
+        st.radio("Changer de bassin", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), 
+                 horizontal=True, key="bassin_radio", on_change=update_bassin)
 
     nage_choisie = st.session_state.nage
-    df_nage = df_current[df_current["Épreuve"] == nage_choisie].sort_values("Date", ascending=False)
-    st.title(f"{nage_choisie} ({st.session_state.bassin})")
+    # On filtre les données selon le bassin actuel choisi par le radio bouton
+    df_nage = full_df[(full_df["Épreuve"] == nage_choisie) & (full_df["Bassin_Type"] == st.session_state.bassin)].sort_values("Date", ascending=False)
+    
+    st.title(f"{nage_choisie} - Bassin {st.session_state.bassin}")
 
     if not df_nage.empty:
         # Identification du record personnel (Temps minimum)
         best_idx = df_nage["Temps_sec"].idxmin()
         
-        # Préparation du tableau avec style
+        # Style du tableau
         table_df = df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]].copy()
         table_df["Date"] = table_df["Date"].dt.date
         
@@ -143,4 +151,4 @@ elif st.session_state.page == "perf":
         df_graph = df_nage.sort_values("Date")
         fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Progression")
         fig.update_traces(mode="lines+markers", marker=dict(size=10, color="#4CAF50"), line=dict(color="#4CAF50"))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width
