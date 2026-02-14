@@ -5,57 +5,41 @@ import re
 import plotly.express as px
 import numpy as np
 from datetime import datetime
-import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Performances Tristan", layout="wide")
 
 # =========================
-# GESTION DU BOUTON RETOUR PHYSIQUE (JS)
+# GESTION DE LA NAVIGATION PAR URL (POUR LE BOUTON RETOUR)
 # =========================
-# Ce script ajoute une entrée dans l'historique du navigateur
-# pour que le bouton "Retour" du téléphone puisse être capturé.
-if "page" not in st.session_state:
+# Récupère la nage dans l'URL (ex: ?nage=100NL)
+params = st.query_params
+
+if "nage" in params:
+    st.session_state.page = "perf"
+    st.session_state.nage = params["nage"]
+else:
     st.session_state.page = "home"
 
-# Injection JS pour détecter le bouton retour du navigateur/téléphone
-components.html(
-    f"""
-    <script>
-    var current_page = "{st.session_state.page}";
-    window.history.pushState({{page: current_page}}, "");
-    
-    window.onpopstate = function(event) {{
-        if (current_page !== "home") {{
-            // Force Streamlit à repasser sur 'home'
-            window.parent.postMessage({{type: "set_page", page: "home"}}, "*");
-        }}
-    }};
-    </script>
-    """,
-    height=0,
-)
+def go_to_perf(nage_name):
+    st.query_params["nage"] = nage_name
+    st.session_state.page = "perf"
+    st.session_state.nage = nage_name
 
-# Réception du message JS pour changer l'état Streamlit
-# Note : Cette partie nécessite que l'URL change ou un déclencheur. 
-# Comme Streamlit est limité en JS direct, on utilise une astuce de navigation interne :
-if st.session_state.get("trigger_back"):
+def go_to_home():
+    st.query_params.clear()
     st.session_state.page = "home"
-    st.session_state.trigger_back = False
-    st.rerun()
 
 # =========================
-# Navigation & État
+# État du Bassin
 # =========================
 if "bassin" not in st.session_state:
     st.session_state.bassin = "50m"
-if "nage" not in st.session_state:
-    st.session_state.nage = None
 
 def update_bassin():
     st.session_state.bassin = st.session_state.bassin_radio
 
 # =========================
-# CSS : FLEXBOX & BOUTONS
+# CSS : DESIGN ET FLEXBOX
 # =========================
 st.markdown("""
 <style>
@@ -125,9 +109,8 @@ if st.session_state.page == "home":
                     cols = st.columns(len(matches))
                     for idx, epreuve in enumerate(matches):
                         with cols[idx]:
-                            if st.button(epreuve, key=f"btn_{epreuve}_{st.session_state.bassin}"):
-                                st.session_state.nage = epreuve
-                                st.session_state.page = "perf"
+                            if st.button(epreuve, key=f"btn_{epreuve}"):
+                                go_to_perf(epreuve)
                                 st.rerun()
     st.markdown("---")
     st.markdown(f'<p class="small-font">Dernière mise à jour FFN : {last_sync}</p>', unsafe_allow_html=True)
@@ -137,7 +120,7 @@ elif st.session_state.page == "perf":
     col_back, col_bassin = st.columns([1, 2])
     with col_back:
         if st.button("⬅ Retour"):
-            st.session_state.page = "home"
+            go_to_home()
             st.rerun()
     with col_bassin:
         st.radio("Bassin", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), 
