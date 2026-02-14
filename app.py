@@ -151,4 +151,6 @@ elif st.session_state.page == "perf":
         df_graph = df_nage.sort_values("Date")
         fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Progression")
         fig.update_traces(mode="lines+markers", marker=dict(size=10, color="#4CAF50"), line=dict(color="#4CAF50"))
-        st.plotly_chart(fig, use_container_width
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info(f"Aucune performance enregistrée en bassin de {st.session_state.bassin} pour cette nage.")
