@@ -6,31 +6,27 @@ import plotly.express as px
 import numpy as np
 from datetime import datetime
 
-# 1. CONFIGURATION INITIALE
 st.set_page_config(page_title="Performances Tristan", layout="wide")
 
-# 2. GESTION DE LA NAVIGATION PAR URL (Version ultra-simplifiée)
-# On regarde l'URL. Si elle contient une nage, on affiche la perf.
-# C'est la seule méthode que le bouton "Back" du téléphone peut détecter.
-url_params = st.query_params
-
-if "nage" in url_params:
-    current_page = "perf"
-    selected_nage = url_params["nage"]
-else:
-    current_page = "home"
-    selected_nage = None
-
-# 3. ÉTAT DU BASSIN
+# =========================
+# Navigation & État
+# =========================
+if "page" not in st.session_state:
+    st.session_state.page = "home"
 if "bassin" not in st.session_state:
     st.session_state.bassin = "50m"
+if "nage" not in st.session_state:
+    st.session_state.nage = None
 
 def update_bassin():
     st.session_state.bassin = st.session_state.bassin_radio
 
-# 4. CSS (Design original + Alignement fluide)
+# =========================
+# CSS : DESIGN ORIGINAL & FLUIDE
+# =========================
 st.markdown("""
 <style>
+/* Style des boutons de nage */
 div.stButton > button {
     width: auto !important;
     min-width: 90px !important;
@@ -42,18 +38,26 @@ div.stButton > button {
     font-weight: bold !important;
     padding: 0 15px !important;
 }
-/* Aligne les boutons de gauche à droite proprement */
+
+/* Fix pour l'alignement horizontal fluide (Flexbox) */
 [data-testid="stHorizontalBlock"] {
     display: flex !important;
     flex-flow: row wrap !important;
     justify-content: flex-start !important;
     gap: 10px !important;
 }
+
 [data-testid="column"] {
     width: auto !important;
     flex: 0 1 auto !important;
     min-width: 0px !important;
 }
+
+/* Ajustement du radio pour qu'il ne s'étale pas */
+.stRadio > div {
+    flex-direction: row !important;
+}
+
 .small-font { font-size:12px !important; color: gray; font-style: italic; text-align: center; }
 </style>
 """, unsafe_allow_html=True)
@@ -63,6 +67,7 @@ def load_all_data():
     idrch_id = "3518107"
     results = []
     sync_time = datetime.now().strftime("%d/%m/%Y à %H:%M")
+    
     for b_code, b_label in [("25", "25m"), ("50", "50m")]:
         url = f"https://ffn.extranat.fr/webffn/nat_recherche.php?idact=nat&idrch_id={idrch_id}&idopt=prf&idbas={b_code}"
         try:
@@ -74,6 +79,7 @@ def load_all_data():
                 name = re.sub(r'[^a-zA-Z0-9\.\s]', '', m[0]).strip()
                 results.append([name] + list(m[1:]) + [b_label])
         except: continue
+    
     df = pd.DataFrame(results, columns=["Épreuve", "Temps", "Âge", "Points", "Ville", "Code pays", "Date", "Catégorie", "Lien résultats", "Club", "Bassin_Type"])
     if not df.empty:
         df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
@@ -82,62 +88,71 @@ def load_all_data():
 
 full_df, last_sync = load_all_data()
 
-# --- LOGIQUE D'AFFICHAGE ---
-
-# PAGE ACCUEIL
-if current_page == "home":
+# --- PAGE ACCUEIL ---
+if st.session_state.page == "home":
     st.title("Performances Tristan 🏊‍♂️")
-    st.radio("Bassin", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), 
+    
+    st.radio("Bassin", ["25m", "50m"], 
+             index=["25m","50m"].index(st.session_state.bassin), 
              horizontal=True, key="bassin_radio", on_change=update_bassin)
 
     df_current = full_df[full_df["Bassin_Type"] == st.session_state.bassin]
+
     if not df_current.empty:
-        tabs = st.tabs(["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"])
+        tab_list = ["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"]
+        tabs = st.tabs(tab_list)
         filters = {"Nage Libre": "NL", "Brasse": "BRA.", "Papillon": "PAP.", "Dos": "DOS", "4 Nages": "4 N."}
+        
         all_names = df_current["Épreuve"].unique()
 
-        for i, (label, tag) in enumerate(filters.items()):
+        for i, label in enumerate(tab_list):
             with tabs[i]:
-                matches = sorted([n for n in all_names if tag in n.upper()], 
-                                 key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
+                tag = filters[label]
+                matches = [n for n in all_names if tag in n.upper()]
+                matches = sorted(matches, key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
+
                 if matches:
                     cols = st.columns(len(matches))
                     for idx, epreuve in enumerate(matches):
                         with cols[idx]:
-                            # Utilisation d'un lien HTML stylé en bouton (PLUS FIABLE POUR LE BACK)
-                            # Ou bouton Streamlit avec mise à jour forcée de l'URL
-                            if st.button(epreuve, key=f"btn_{epreuve}"):
-                                st.query_params["nage"] = epreuve
+                            if st.button(epreuve, key=f"btn_{epreuve}_{st.session_state.bassin}"):
+                                st.session_state.nage = epreuve
+                                st.session_state.page = "perf"
                                 st.rerun()
+    
     st.markdown("---")
     st.markdown(f'<p class="small-font">Dernière mise à jour FFN : {last_sync}</p>', unsafe_allow_html=True)
 
-# PAGE PERFORMANCE
-else:
-    # Header avec bouton retour et choix du bassin
-    col_back, col_bassin = st.columns([1, 2])
-    with col_back:
-        if st.button("⬅ Retour"):
-            st.query_params.clear()
-            st.rerun()
-    with col_bassin:
-        st.radio("Bassin", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), 
-                 horizontal=True, key="bassin_radio", on_change=update_bassin)
+# --- PAGE PERFORMANCE ---
+elif st.session_state.page == "perf":
+    if st.button("⬅ Retour"):
+        st.session_state.page = "home"
+        st.rerun()
 
-    df_nage = full_df[(full_df["Épreuve"] == selected_nage) & (full_df["Bassin_Type"] == st.session_state.bassin)].sort_values("Date", ascending=False)
-    st.title(f"{selected_nage} - {st.session_state.bassin}")
+    st.title(f"{st.session_state.nage}")
+    
+    # Sélecteur de bassin compact et aligné à gauche
+    st.radio("Bassin :", ["25m", "50m"], 
+             index=["25m","50m"].index(st.session_state.bassin), 
+             horizontal=True, key="bassin_radio", on_change=update_bassin)
+
+    df_nage = full_df[(full_df["Épreuve"] == st.session_state.nage) & (full_df["Bassin_Type"] == st.session_state.bassin)].sort_values("Date", ascending=False)
 
     if not df_nage.empty:
-        # Meilleure performance
+        # Mise en valeur de la RP (Rose)
         best_idx = df_nage["Temps_sec"].idxmin()
-        
         table_df = df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]].copy()
         table_df["Date"] = table_df["Date"].dt.date
-        st.dataframe(table_df.style.apply(lambda row: ['background-color: #ffe4e1' if row.name == best_idx else '' for _ in row], axis=1), use_container_width=True)
         
+        st.dataframe(
+            table_df.style.apply(lambda row: ['background-color: #ffe4e1' if row.name == best_idx else '' for _ in row], axis=1), 
+            use_container_width=True
+        )
+        
+        # Graphique
         df_graph = df_nage.sort_values("Date")
         fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Progression")
         fig.update_traces(mode="lines+markers", marker=dict(size=10, color="#4CAF50"), line=dict(color="#4CAF50"))
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info(f"Aucune donnée pour cette nage en bassin de {st.session_state.bassin}.")
+        st.info(f"Aucune donnée disponible en {st.session_state.bassin} pour cette nage.")
