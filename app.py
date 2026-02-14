@@ -23,40 +23,32 @@ def update_bassin():
     st.session_state.bassin = st.session_state.bassin_radio
 
 # =========================
-# CSS : FORÇAGE DE LA GRILLE 3 COLONNES
+# CSS (Design original)
 # =========================
 st.markdown("""
 <style>
-/* Style des boutons */
 div.stButton > button {
     width: 100% !important;
-    height: 45px !important;
+    height: 50px !important;
     background-color: #4CAF50 !important;
     color: white !important;
-    border-radius: 8px !important;
-    font-weight: bold !important;
-    margin-bottom: 5px !important;
+    border-radius: 10px !important;
     border: none !important;
+    font-weight: bold !important;
 }
-
-/* LE FIX POUR MOBILE : On force le conteneur de colonnes à rester en ligne */
-[data-testid="stHorizontalBlock"] {
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: nowrap !important; /* Interdit le passage à la ligne à l'intérieur d'un bloc de 3 */
-    gap: 5px !important;
+div.stButton > button p { color: white !important; }
+.small-font {
+    font-size:12px !important;
+    color: gray;
+    font-style: italic;
+    text-align: center;
 }
-
-[data-testid="column"] {
-    width: 33% !important; /* Chaque bouton prend exactement un tiers */
-    flex: 1 1 33% !important;
-    min-width: 0px !important; /* Supprime la limite qui fait sauter les lignes sur mobile */
-}
-
-.small-font { font-size:11px !important; color: gray; font-style: italic; text-align: center; }
 </style>
 """, unsafe_allow_html=True)
 
+# =========================
+# Scraping & Tri
+# =========================
 @st.cache_data(ttl=600)
 def load_all_data():
     idrch_id = "3518107"
@@ -84,42 +76,40 @@ def load_all_data():
 full_df, last_sync = load_all_data()
 df_current = full_df[full_df["Bassin_Type"] == st.session_state.bassin]
 
-# --- ACCUEIL ---
+# --- PAGE ACCUEIL ---
 if st.session_state.page == "home":
     st.title("Performances Tristan 🏊‍♂️")
     st.radio("Bassin", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), horizontal=True, key="bassin_radio", on_change=update_bassin)
 
     if not df_current.empty:
-        tab_labels = ["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"]
-        tabs = st.tabs(tab_labels)
+        tab_list = ["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"]
+        tabs = st.tabs(tab_list)
         filters = {"Nage Libre": "NL", "Brasse": "BRA.", "Papillon": "PAP.", "Dos": "DOS", "4 Nages": "4 N."}
         
-        all_names = df_current["Épreuve"].unique()
-
-        for i, label in enumerate(tab_labels):
+        all_epreuves = df_current["Épreuve"].unique().tolist()
+        
+        for i, label in enumerate(tab_list):
             with tabs[i]:
                 tag = filters[label]
-                matches = [n for n in all_names if tag in n.upper()]
+                matches = [e for e in all_epreuves if tag in e.upper()]
                 
                 # TRI NUMÉRIQUE (50, 100, 200, 400, 800)
                 matches = sorted(matches, key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
+                
+                if not matches:
+                    st.info("Aucune épreuve trouvée.")
+                else:
+                    cols = st.columns(3)
+                    for j, epreuve in enumerate(matches):
+                        if cols[j % 3].button(epreuve, key=f"btn_{epreuve}_{st.session_state.bassin}"):
+                            st.session_state.nage = epreuve
+                            st.session_state.page = "perf"
+                            st.rerun()
 
-                if matches:
-                    # On crée manuellement des lignes de 3 colonnes
-                    for j in range(0, len(matches), 3):
-                        row_matches = matches[j:j+3]
-                        cols = st.columns(3)
-                        for idx, epreuve in enumerate(row_matches):
-                            with cols[idx]:
-                                if st.button(epreuve, key=f"btn_{epreuve}_{st.session_state.bassin}"):
-                                    st.session_state.nage = epreuve
-                                    st.session_state.page = "perf"
-                                    st.rerun()
-    
     st.markdown("---")
     st.markdown(f'<p class="small-font">Dernière mise à jour FFN : {last_sync}</p>', unsafe_allow_html=True)
 
-# --- PERFORMANCE ---
+# --- PAGE PERFORMANCE ---
 elif st.session_state.page == "perf":
     if st.button("⬅ Retour"):
         st.session_state.page = "home"
@@ -127,11 +117,14 @@ elif st.session_state.page == "perf":
 
     nage_choisie = st.session_state.nage
     df_nage = df_current[df_current["Épreuve"] == nage_choisie].sort_values("Date", ascending=False)
-    st.title(f"{nage_choisie}")
+    st.title(f"{nage_choisie} ({st.session_state.bassin})")
 
     if not df_nage.empty:
-        st.dataframe(df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]], use_container_width=True)
+        table_df = df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]].copy()
+        table_df["Date"] = table_df["Date"].dt.date
+        st.dataframe(table_df, use_container_width=True)
+
         df_graph = df_nage.sort_values("Date")
         fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Progression")
-        fig.update_traces(mode="lines+markers", marker=dict(color="#4CAF50"))
+        fig.update_traces(mode="lines+markers", marker=dict(size=10, color="#4CAF50"), line=dict(color="#4CAF50"))
         st.plotly_chart(fig, use_container_width=True)
