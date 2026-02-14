@@ -23,14 +23,14 @@ def update_bassin():
     st.session_state.bassin = st.session_state.bassin_radio
 
 # =========================
-# CSS : ALIGNEMENT FLUIDE (FLEX)
+# CSS : FLEXBOX FLUIDE + BOUTONS
 # =========================
 st.markdown("""
 <style>
 /* Style des boutons originaux */
 div.stButton > button {
-    width: auto !important; /* Largeur automatique selon le texte */
-    min-width: 80px !important;
+    width: auto !important;
+    min-width: 90px !important;
     height: 45px !important;
     background-color: #4CAF50 !important;
     color: white !important;
@@ -38,23 +38,20 @@ div.stButton > button {
     border: none !important;
     font-weight: bold !important;
     padding: 0 15px !important;
-    margin-right: 5px !important;
 }
 
-/* Force l'alignement horizontal fluide */
+/* LE FIX ULTIME POUR L'ALIGNEMENT HORIZONTAL FLUIDE */
 [data-testid="stHorizontalBlock"] {
     display: flex !important;
-    flex-wrap: wrap !important; /* Autorise le passage à la ligne */
-    flex-direction: row !important;
+    flex-flow: row wrap !important; /* Force la ligne et permet le saut de ligne */
     justify-content: flex-start !important;
     gap: 10px !important;
 }
 
-/* Désactive la rigidité des colonnes de Streamlit */
 [data-testid="column"] {
     width: auto !important;
     flex: 0 1 auto !important;
-    min-width: auto !important;
+    min-width: 0px !important;
 }
 
 .small-font { font-size:12px !important; color: gray; font-style: italic; text-align: center; }
@@ -104,11 +101,10 @@ if st.session_state.page == "home":
             with tabs[i]:
                 tag = filters[label]
                 matches = [n for n in all_names if tag in n.upper()]
-                # TRI NUMÉRIQUE (50, 100, 200...)
+                # Tri numérique (50, 100, 200...)
                 matches = sorted(matches, key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
 
                 if matches:
-                    # On crée autant de colonnes que d'épreuves pour permettre le flux horizontal
                     cols = st.columns(len(matches))
                     for idx, epreuve in enumerate(matches):
                         with cols[idx]:
@@ -128,11 +124,23 @@ elif st.session_state.page == "perf":
 
     nage_choisie = st.session_state.nage
     df_nage = df_current[df_current["Épreuve"] == nage_choisie].sort_values("Date", ascending=False)
-    st.title(f"{nage_choisie}")
+    st.title(f"{nage_choisie} ({st.session_state.bassin})")
 
     if not df_nage.empty:
-        st.dataframe(df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]], use_container_width=True)
+        # Identification du record personnel (Temps minimum)
+        best_idx = df_nage["Temps_sec"].idxmin()
+        
+        # Préparation du tableau avec style
+        table_df = df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]].copy()
+        table_df["Date"] = table_df["Date"].dt.date
+        
+        def highlight_best(row):
+            return ['background-color: #ffe4e1' if row.name == best_idx else '' for _ in row]
+
+        st.dataframe(table_df.style.apply(highlight_best, axis=1), use_container_width=True)
+        
+        # Graphique
         df_graph = df_nage.sort_values("Date")
         fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Progression")
-        fig.update_traces(mode="lines+markers", marker=dict(color="#4CAF50"))
+        fig.update_traces(mode="lines+markers", marker=dict(size=10, color="#4CAF50"), line=dict(color="#4CAF50"))
         st.plotly_chart(fig, use_container_width=True)
