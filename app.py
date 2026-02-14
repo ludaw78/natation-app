@@ -8,9 +8,8 @@ import base64
 from datetime import datetime
 
 # ==========================================
-# 1. CONFIGURATION & ICÔNE SVG
+# 1. CONFIGURATION & ICÔNE
 # ==========================================
-# Icône personnalisée : Nageur blanc sur fond vert arrondi
 LOG_SVG = """
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
     <rect width="100" height="100" rx="20" fill="#4CAF50"/>
@@ -22,174 +21,125 @@ LOG_SVG = """
 encoded_svg = base64.b64encode(LOG_SVG.encode()).decode()
 icon_data = f"data:image/svg+xml;base64,{encoded_svg}"
 
-st.set_page_config(
-    page_title="Performances Tristan",
-    page_icon=icon_data,
-    layout="wide"
-)
+st.set_page_config(page_title="Tristan Swim", page_icon=icon_data, layout="wide")
 
-# Injection pour l'icône de l'écran d'accueil mobile
+# Forçage icône mobile
 st.markdown(f'<link rel="apple-touch-icon" href="{icon_data}">', unsafe_allow_html=True)
 
 # =========================
-# 2. NAVIGATION & ÉTAT
+# 2. NAVIGATION
 # =========================
-if "page" not in st.session_state:
-    st.session_state.page = "home"
-if "bassin" not in st.session_state:
-    st.session_state.bassin = "50m"
-if "nage" not in st.session_state:
-    st.session_state.nage = None
+if "page" not in st.session_state: st.session_state.page = "home"
+if "bassin" not in st.session_state: st.session_state.bassin = "50m"
+if "nage" not in st.session_state: st.session_state.nage = None
 
 def update_bassin():
-    # Synchronise le choix du bassin entre les widgets radio
     st.session_state.bassin = st.session_state.bassin_radio
 
 # =========================
-# 3. CSS : INTERFACE MOBILE
+# 3. CSS
 # =========================
 st.markdown("""
 <style>
-/* Boutons de nage stylisés */
-div.stButton > button {
-    width: auto !important;
-    min-width: 90px !important;
-    height: 45px !important;
-    background-color: #4CAF50 !important;
-    color: white !important;
-    border-radius: 10px !important;
-    border: none !important;
-    font-weight: bold !important;
-    padding: 0 15px !important;
-}
-
-/* Alignement horizontal fluide (Flexbox) */
-[data-testid="stHorizontalBlock"] {
-    display: flex !important;
-    flex-flow: row wrap !important;
-    justify-content: flex-start !important;
-    gap: 10px !important;
-}
-
-[data-testid="column"] {
-    width: auto !important;
-    flex: 0 1 auto !important;
-    min-width: 0px !important;
-}
-
-/* Alignement des radios */
-.stRadio > div {
-    flex-direction: row !important;
-    gap: 15px;
-}
-
-.small-font { font-size:12px !important; color: gray; font-style: italic; text-align: center; }
+div.stButton > button { width: auto !important; min-width: 90px !important; height: 45px !important; background-color: #4CAF50 !important; color: white !important; border-radius: 10px !important; font-weight: bold !important; }
+[data-testid="stHorizontalBlock"] { display: flex !important; flex-flow: row wrap !important; gap: 10px !important; }
+[data-testid="column"] { width: auto !important; flex: 0 1 auto !important; }
+.stRadio > div { flex-direction: row !important; gap: 15px; }
 </style>
 """, unsafe_allow_html=True)
 
 # =========================
-# 4. RÉCUPÉRATION DONNÉES
+# 4. DATA
 # =========================
 @st.cache_data(ttl=600)
-def load_all_data():
+def load_data():
     idrch_id = "3518107"
     results = []
-    sync_time = datetime.now().strftime("%d/%m/%Y à %H:%M")
-    
     for b_code, b_label in [("25", "25m"), ("50", "50m")]:
         url = f"https://ffn.extranat.fr/webffn/nat_recherche.php?idact=nat&idrch_id={idrch_id}&idopt=prf&idbas={b_code}"
         try:
-            response = requests.get(url, timeout=10)
-            html = response.text
-            # Pattern Regex pour extraire les lignes de résultats FFN
-            pattern = re.compile(r'<tr[^>]*>.*?<th[^>]*>([^<]+)</th>.*?<td[^>]*font-bold[^>]*>(?:<button[^>]*>)?(?:<a[^>]*>)?\s*([\d:.]+)\s*(?:</a>)?(?:</button>)?</td>.*?<td[^>]*>\(([^)]+)\)</td>.*?<td[^>]*italic[^>]*>([^<]+)</td>.*?<p>([A-ZÀ-ÿ\s-]+)</p>\s*<p>\(([A-Z]+)\)</p>.*?<td[^>]*>(\d{2}/\d{2}/\d{4})</td>.*?<td[^>]*>(\[[^\]]+\])</td>.*?href="([^"]*resultats\.php[^"]*)".*?</td>\s*<td[^>]*>([^<]+)</td>', re.DOTALL)
-            matches = pattern.findall(html)
+            r = requests.get(url, timeout=10)
+            matches = re.findall(r'<tr[^>]*>.*?<th[^>]*>([^<]+)</th>.*?<td[^>]*font-bold[^>]*>(?:<button[^>]*>)?(?:<a[^>]*>)?\s*([\d:.]+)\s*(?:</a>)?(?:</button>)?</td>.*?<td[^>]*>\(([^)]+)\)</td>.*?<td[^>]*italic[^>]*>([^<]+)</td>.*?<p>([A-ZÀ-ÿ\s-]+)</p>\s*<p>\(([A-Z]+)\)</p>.*?<td[^>]*>(\d{2}/\d{2}/\d{4})</td>.*?<td[^>]*>(\[[^\]]+\])</td>.*?href="([^"]*resultats\.php[^"]*)".*?</td>\s*<td[^>]*>([^<]+)</td>', r.text, re.DOTALL)
             for m in matches:
                 name = re.sub(r'[^a-zA-Z0-9\.\s]', '', m[0]).strip()
-                results.append([name] + list(m[1:]) + [b_label])
-        except Exception:
-            continue
-    
-    df = pd.DataFrame(results, columns=["Épreuve", "Temps", "Âge", "Points", "Ville", "Code pays", "Date", "Catégorie", "Lien résultats", "Club", "Bassin_Type"])
-    if not df.empty:
-        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
-        # Conversion du temps en secondes pour le graphique
-        df["Temps_sec"] = df["Temps"].apply(lambda t: int(t.split(":")[0])*60 + float(t.split(":")[1]) if ":" in t else float(t))
-    return df, sync_time
+                results.append([name, m[1], m[2], m[3], m[4], m[6], b_label])
+        except: continue
+    df = pd.DataFrame(results, columns=["Épreuve", "Temps", "Âge", "Points", "Ville", "Date", "Bassin"])
+    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
+    df["Temps_sec"] = df["Temps"].apply(lambda t: int(t.split(":")[0])*60 + float(t.split(":")[1]) if ":" in t else float(t))
+    return df
 
-full_df, last_sync = load_all_data()
+full_df = load_data()
 
 # =========================
-# 5. LOGIQUE DES PAGES
+# 5. PAGES
 # =========================
 
-# --- PAGE ACCUEIL ---
 if st.session_state.page == "home":
     st.title("Performances Tristan 🏊‍♂️")
+    st.radio("Bassin", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), horizontal=True, key="bassin_radio", on_change=update_bassin)
     
-    st.radio("Bassin", ["25m", "50m"], 
-             index=["25m","50m"].index(st.session_state.bassin), 
-             horizontal=True, key="bassin_radio", on_change=update_bassin)
-
-    df_current = full_df[full_df["Bassin_Type"] == st.session_state.bassin]
-
-    if not df_current.empty:
-        tab_list = ["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"]
-        tabs = st.tabs(tab_list)
-        filters = {"Nage Libre": "NL", "Brasse": "BRA.", "Papillon": "PAP.", "Dos": "DOS", "4 Nages": "4 N."}
-        
-        all_names = df_current["Épreuve"].unique()
-
-        for i, label in enumerate(tab_list):
-            with tabs[i]:
-                tag = filters[label]
-                matches = [n for n in all_names if tag in n.upper()]
-                # Tri logique (50, 100, 200, 400...)
-                matches = sorted(matches, key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
-
-                if matches:
-                    # Utilisation de colonnes fictives pour forcer l'alignement Flexbox via CSS
-                    cols = st.columns(len(matches))
-                    for idx, epreuve in enumerate(matches):
-                        with cols[idx]:
-                            if st.button(epreuve, key=f"btn_{epreuve}"):
-                                st.session_state.nage = epreuve
-                                st.session_state.page = "perf"
-                                st.rerun()
+    df_c = full_df[full_df["Bassin"] == st.session_state.bassin]
+    tabs = st.tabs(["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"])
+    filters = {"Nage Libre": "NL", "Brasse": "BRA.", "Papillon": "PAP.", "Dos": "DOS", "4 Nages": "4 N."}
     
-    st.markdown("---")
-    st.markdown(f'<p class="small-font">Dernière mise à jour FFN : {last_sync}</p>', unsafe_allow_html=True)
+    for i, (label, tag) in enumerate(filters.items()):
+        with tabs[i]:
+            matches = sorted(df_c[df_c["Épreuve"].str.contains(tag, case=False)]["Épreuve"].unique(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+            if matches:
+                cols = st.columns(len(matches))
+                for idx, n in enumerate(matches):
+                    if cols[idx].button(n):
+                        st.session_state.nage = n
+                        st.session_state.page = "perf"
+                        st.rerun()
 
-# --- PAGE PERFORMANCE ---
-elif st.session_state.page == "perf":
+else:
     if st.button("⬅ Retour"):
         st.session_state.page = "home"
         st.rerun()
-
-    st.title(f"{st.session_state.nage}")
     
-    # Filtre bassin compact sous le titre
-    st.radio("Changer de bassin :", ["25m", "50m"], 
-             index=["25m","50m"].index(st.session_state.bassin), 
-             horizontal=True, key="bassin_radio", on_change=update_bassin)
+    st.title(st.session_state.nage)
+    st.radio("Bassin :", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), horizontal=True, key="bassin_radio", on_change=update_bassin)
+    
+    df_n = full_df[(full_df["Épreuve"] == st.session_state.nage) & (full_df["Bassin"] == st.session_state.bassin)].sort_values("Date", ascending=False)
+    
+    if not df_n.empty:
+        # TABLEAU SANS INDEX ET AVEC RP EN COULEUR
+        def highlight_max(s):
+            is_best = s == df_n["Temps_sec"].min()
+            return ['background-color: #ffe4e1' if v else '' for v in is_best]
 
-    df_nage = full_df[(full_df["Épreuve"] == st.session_state.nage) & (full_df["Bassin_Type"] == st.session_state.bassin)].sort_values("Date", ascending=False)
-
-    if not df_nage.empty:
-        # Mise en évidence Rose de la meilleure perf (Record Personnel)
-        best_idx = df_nage["Temps_sec"].idxmin()
-        table_df = df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]].copy()
-        table_df["Date"] = table_df["Date"].dt.date
+        display_df = df_n[["Date", "Temps", "Âge", "Points", "Ville"]].copy()
+        display_df["Date"] = display_df["Date"].dt.strftime('%d/%m/%Y')
         
-        st.dataframe(
-            table_df.style.apply(lambda row: ['background-color: #ffe4e1' if row.name == best_idx else '' for _ in row], axis=1), 
-            use_container_width=True
+        # On affiche le dataframe sans la colonne d'index
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        
+        # GRAPHIQUE
+        df_g = df_n.sort_values("Date")
+        # On crée une colonne de texte pour le format min'sec''
+        df_g["Temps_label"] = df_g["Temps_sec"].apply(lambda x: f"{int(x//60)}'{int(x%60):02}''{int((x*100)%100):02}")
+        
+        fig = px.line(df_g, x="Date", y="Temps_sec", markers=True, title="Évolution")
+        fig.update_traces(
+            line_color='#4CAF50', 
+            marker=dict(size=10),
+            text=df_g["Temps_label"],
+            hovertemplate="Date: %{x}<br>Temps: %{text}<extra></extra>"
         )
         
-        # Graphique de progression
-        df_graph = df_nage.sort_values("Date")
-        fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Évolution des performances")
-        fig.update_traces(mode="lines+markers", marker=dict(size=10, color="#4CAF50"), line=dict(color="#4CAF50"))
+        # Correction axe Y pour afficher min'sec
+        min_y = df_g["Temps_sec"].min() * 0.98
+        max_y = df_g["Temps_sec"].max() * 1.02
+        
+        fig.update_layout(
+            yaxis=dict(
+                tickmode='array',
+                tickvals=np.linspace(df_g["Temps_sec"].min(), df_g["Temps_sec"].max(), 5),
+                ticktext=[f"{int(v//60)}'{int(v%60):02}''" for v in np.linspace(df_g["Temps_sec"].min(), df_g["Temps_sec"].max(), 5)]
+            ),
+            xaxis_title=None,
+            yaxis_title="Temps (min'sec'')"
+        )
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info(f"Aucune donnée enregistrée en {st.session_state.bassin} pour cette nage.")
