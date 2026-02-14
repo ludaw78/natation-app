@@ -53,8 +53,8 @@ div.stButton > button p { color: white !important; }
 def load_all_data():
     idrch_id = "3518107"
     results = []
-    # On capture l'heure précise du scraping
-    sync_time = datetime.now().strftime("%H:%M")
+    # Capture de la date et de l'heure
+    sync_time = datetime.now().strftime("%d/%m/%Y à %H:%M")
     
     for b_code, b_label in [("25", "25m"), ("50", "50m")]:
         url = f"https://ffn.extranat.fr/webffn/nat_recherche.php?idact=nat&idrch_id={idrch_id}&idopt=prf&idbas={b_code}"
@@ -74,14 +74,20 @@ def load_all_data():
     df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
     df["Temps_sec"] = df["Temps"].apply(lambda t: int(t.split(":")[0])*60 + float(t.split(":")[1]) if ":" in t else float(t))
     
+    # Tri par type de nage puis par distance croissante
     ordre_nages = {"NL": 0, "BRA.": 1, "PAP.": 2, "DOS": 3, "4 N.": 4}
+    
     def get_sort_tuple(epreuve):
         nom_up = epreuve.upper()
-        idx = next((v for k, v in ordre_nages.items() if k in nom_up), 99)
-        dist = int(re.findall(r"\d+", epreuve)[0]) if re.findall(r"\d+", epreuve) else 0
-        return (idx, dist)
+        idx_nage = next((v for k, v in ordre_nages.items() if k in nom_up), 99)
+        dist_match = re.search(r"(\d+)", epreuve)
+        distance = int(dist_match.group(1)) if dist_match else 0
+        return (idx_nage, distance)
+
     df["sort_tuple"] = df["Épreuve"].apply(get_sort_tuple)
-    return df.sort_values(by="sort_tuple").drop(columns=["sort_tuple"]), sync_time
+    df = df.sort_values(by=["sort_tuple"]).drop(columns=["sort_tuple"])
+    
+    return df, sync_time
 
 full_df, last_sync = load_all_data()
 df_current = full_df[full_df["Bassin_Type"] == st.session_state.bassin]
@@ -105,7 +111,7 @@ if st.session_state.page == "home":
             "4 Nages": ["4 N."]
         }
         
-        all_epreuves = list(df_current["Épreuve"].unique())
+        all_epreuves = df_current["Épreuve"].unique().tolist()
         
         for i, label in enumerate(tab_list):
             with tabs[i]:
@@ -117,8 +123,8 @@ if st.session_state.page == "home":
                     for j, epreuve in enumerate(matches):
                         cols[j % 3].button(epreuve, key=f"btn_{epreuve}", on_click=lambda e=epreuve: st.session_state.update({"nage": e, "page": "perf"}), use_container_width=True)
 
-    # Petit horodatage en bas de page
     st.markdown("---")
+    # Affichage Date + Heure
     st.markdown(f'<p class="small-font">Dernière mise à jour FFN : {last_sync}</p>', unsafe_allow_html=True)
 
 # --- PAGE PERFORMANCE ---
