@@ -47,9 +47,8 @@ div.stButton > button p { color: white !important; }
 """, unsafe_allow_html=True)
 
 # =========================
-# Scraping Global (Cache 1h)
+# Scraping Global (CACHE DÉSACTIVÉ POUR TESTER LE TRI)
 # =========================
-@st.cache_data(ttl=3600)
 def load_all_data():
     idrch_id = "3518107"
     results = []
@@ -63,7 +62,9 @@ def load_all_data():
             pattern = re.compile(r'<tr[^>]*>.*?<th[^>]*>([^<]+)</th>.*?<td[^>]*font-bold[^>]*>(?:<button[^>]*>)?(?:<a[^>]*>)?\s*([\d:.]+)\s*(?:</a>)?(?:</button>)?</td>.*?<td[^>]*>\(([^)]+)\)</td>.*?<td[^>]*italic[^>]*>([^<]+)</td>.*?<p>([A-ZÀ-ÿ\s-]+)</p>\s*<p>\(([A-Z]+)\)</p>.*?<td[^>]*>(\d{2}/\d{2}/\d{4})</td>.*?<td[^>]*>(\[[^\]]+\])</td>.*?href="([^"]*resultats\.php[^"]*)".*?</td>\s*<td[^>]*>([^<]+)</td>', re.DOTALL)
             matches = pattern.findall(html)
             for m in matches:
-                results.append(list(m) + [b_label])
+                # Nettoyage immédiat des noms d'épreuves (espaces superflus)
+                clean_name = " ".join(m[0].split())
+                results.append([clean_name] + list(m[1:]) + [b_label])
         except: continue
 
     if not results: return pd.DataFrame(), sync_time
@@ -97,26 +98,24 @@ if st.session_state.page == "home":
             "4 Nages": ["4 N."]
         }
         
+        # On récupère toutes les épreuves uniques
         all_epreuves = df_current["Épreuve"].unique().tolist()
         
-        # Fonction de tri robuste : extrait TOUS les chiffres et les transforme en nombre
-        def extract_dist_robust(text):
-            digits = "".join(filter(str.isdigit, text))
-            return int(digits) if digits else 9999
-
         for i, label in enumerate(tab_list):
             with tabs[i]:
-                # Filtrage strict
+                # 1. Filtrer les épreuves de la catégorie
                 cat_matches = [e for e in all_epreuves if any(f.upper() in e.upper() for f in filters[label])]
-                # Tri forcé par la valeur numérique de la distance
-                cat_matches = sorted(cat_matches, key=extract_dist_robust)
+                
+                # 2. TRI NUMÉRIQUE EXPLÍCITE
+                # On extrait le premier nombre (distance) et on trie dessus
+                cat_matches.sort(key=lambda x: int(re.search(r'(\d+)', x).group(1)) if re.search(r'(\d+)', x) else 0)
                 
                 if not cat_matches:
                     st.info("Aucune épreuve trouvée.")
                 else:
                     cols = st.columns(3)
                     for j, epreuve in enumerate(cat_matches):
-                        cols[j % 3].button(epreuve, key=f"btn_{epreuve}", on_click=lambda e=epreuve: st.session_state.update({"nage": e, "page": "perf"}), use_container_width=True)
+                        cols[j % 3].button(epreuve, key=f"btn_{epreuve}_{i}", on_click=lambda e=epreuve: st.session_state.update({"nage": e, "page": "perf"}), use_container_width=True)
 
     st.markdown("---")
     st.markdown(f'<p class="small-font">Dernière mise à jour FFN : {last_sync}</p>', unsafe_allow_html=True)
