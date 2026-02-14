@@ -6,27 +6,32 @@ import plotly.express as px
 import numpy as np
 from datetime import datetime
 
+# Configuration de la page
 st.set_page_config(page_title="Performances Tristan", layout="wide")
 
-# =========================
-# GESTION DE LA NAVIGATION PAR URL (POUR LE BOUTON RETOUR)
-# =========================
-# Récupère la nage dans l'URL (ex: ?nage=100NL)
-params = st.query_params
+# ==========================================
+# GESTION DE LA NAVIGATION (Bouton Retour)
+# ==========================================
 
-if "nage" in params:
+# Récupération des paramètres dans l'URL
+query_params = st.query_params
+
+# Si "nage" est dans l'URL, on affiche la page perf, sinon accueil
+if "nage" in query_params:
     st.session_state.page = "perf"
-    st.session_state.nage = params["nage"]
+    st.session_state.nage = query_params["nage"]
 else:
     st.session_state.page = "home"
 
+# Fonction pour aller à la page performance
 def go_to_perf(nage_name):
-    st.query_params["nage"] = nage_name
+    st.query_params["nage"] = nage_name  # Met à jour l'URL
     st.session_state.page = "perf"
     st.session_state.nage = nage_name
 
+# Fonction pour revenir à l'accueil
 def go_to_home():
-    st.query_params.clear()
+    st.query_params.clear() # Vide l'URL
     st.session_state.page = "home"
 
 # =========================
@@ -54,13 +59,18 @@ div.stButton > button {
     font-weight: bold !important;
     padding: 0 15px !important;
 }
+/* Aligne les boutons de gauche à droite et passe à la ligne */
 [data-testid="stHorizontalBlock"] {
     display: flex !important;
     flex-flow: row wrap !important;
     justify-content: flex-start !important;
     gap: 10px !important;
 }
-[data-testid="column"] { width: auto !important; flex: 0 1 auto !important; min-width: 0px !important; }
+[data-testid="column"] { 
+    width: auto !important; 
+    flex: 0 1 auto !important; 
+    min-width: 0px !important; 
+}
 .small-font { font-size:12px !important; color: gray; font-style: italic; text-align: center; }
 </style>
 """, unsafe_allow_html=True)
@@ -103,12 +113,14 @@ if st.session_state.page == "home":
 
         for i, (label, tag) in enumerate(filters.items()):
             with tabs[i]:
+                # Tri numérique (50, 100, 200...)
                 matches = sorted([n for n in all_names if tag in n.upper()], 
                                  key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
                 if matches:
                     cols = st.columns(len(matches))
                     for idx, epreuve in enumerate(matches):
                         with cols[idx]:
+                            # Utilisation de la fonction qui change l'URL
                             if st.button(epreuve, key=f"btn_{epreuve}"):
                                 go_to_perf(epreuve)
                                 st.rerun()
@@ -130,11 +142,13 @@ elif st.session_state.page == "perf":
     st.title(f"{st.session_state.nage} - {st.session_state.bassin}")
 
     if not df_nage.empty:
+        # Mise en valeur de la meilleure performance (RP)
         best_idx = df_nage["Temps_sec"].idxmin()
         table_df = df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]].copy()
         table_df["Date"] = table_df["Date"].dt.date
         st.dataframe(table_df.style.apply(lambda row: ['background-color: #ffe4e1' if row.name == best_idx else '' for _ in row], axis=1), use_container_width=True)
         
+        # Graphique de progression
         df_graph = df_nage.sort_values("Date")
         fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Progression")
         fig.update_traces(mode="lines+markers", marker=dict(size=10, color="#4CAF50"), line=dict(color="#4CAF50"))
