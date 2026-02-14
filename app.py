@@ -10,6 +10,7 @@ from datetime import datetime
 # ==========================================
 # 1. CONFIGURATION & ICÔNE SVG
 # ==========================================
+# Icône personnalisée : Nageur blanc sur fond vert arrondi
 LOG_SVG = """
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
     <rect width="100" height="100" rx="20" fill="#4CAF50"/>
@@ -27,7 +28,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Icône pour écran d'accueil mobile
+# Injection pour l'icône de l'écran d'accueil mobile
 st.markdown(f'<link rel="apple-touch-icon" href="{icon_data}">', unsafe_allow_html=True)
 
 # =========================
@@ -41,10 +42,11 @@ if "nage" not in st.session_state:
     st.session_state.nage = None
 
 def update_bassin():
+    # Synchronise le choix du bassin entre les widgets radio
     st.session_state.bassin = st.session_state.bassin_radio
 
 # =========================
-# 3. CSS : DESIGN & FLUIDITÉ
+# 3. CSS : INTERFACE MOBILE
 # =========================
 st.markdown("""
 <style>
@@ -61,7 +63,7 @@ div.stButton > button {
     padding: 0 15px !important;
 }
 
-/* Alignement horizontal fluide (Flexbox) - Pas de colonnes rigides */
+/* Alignement horizontal fluide (Flexbox) */
 [data-testid="stHorizontalBlock"] {
     display: flex !important;
     flex-flow: row wrap !important;
@@ -75,7 +77,7 @@ div.stButton > button {
     min-width: 0px !important;
 }
 
-/* Radio boutons horizontaux propres */
+/* Alignement des radios */
 .stRadio > div {
     flex-direction: row !important;
     gap: 15px;
@@ -86,7 +88,7 @@ div.stButton > button {
 """, unsafe_allow_html=True)
 
 # =========================
-# 4. CHARGEMENT DES DONNÉES
+# 4. RÉCUPÉRATION DONNÉES
 # =========================
 @st.cache_data(ttl=600)
 def load_all_data():
@@ -99,24 +101,29 @@ def load_all_data():
         try:
             response = requests.get(url, timeout=10)
             html = response.text
+            # Pattern Regex pour extraire les lignes de résultats FFN
             pattern = re.compile(r'<tr[^>]*>.*?<th[^>]*>([^<]+)</th>.*?<td[^>]*font-bold[^>]*>(?:<button[^>]*>)?(?:<a[^>]*>)?\s*([\d:.]+)\s*(?:</a>)?(?:</button>)?</td>.*?<td[^>]*>\(([^)]+)\)</td>.*?<td[^>]*italic[^>]*>([^<]+)</td>.*?<p>([A-ZÀ-ÿ\s-]+)</p>\s*<p>\(([A-Z]+)\)</p>.*?<td[^>]*>(\d{2}/\d{2}/\d{4})</td>.*?<td[^>]*>(\[[^\]]+\])</td>.*?href="([^"]*resultats\.php[^"]*)".*?</td>\s*<td[^>]*>([^<]+)</td>', re.DOTALL)
             matches = pattern.findall(html)
             for m in matches:
                 name = re.sub(r'[^a-zA-Z0-9\.\s]', '', m[0]).strip()
                 results.append([name] + list(m[1:]) + [b_label])
-        except: continue
+        except Exception:
+            continue
     
     df = pd.DataFrame(results, columns=["Épreuve", "Temps", "Âge", "Points", "Ville", "Code pays", "Date", "Catégorie", "Lien résultats", "Club", "Bassin_Type"])
     if not df.empty:
         df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
+        # Conversion du temps en secondes pour le graphique
         df["Temps_sec"] = df["Temps"].apply(lambda t: int(t.split(":")[0])*60 + float(t.split(":")[1]) if ":" in t else float(t))
     return df, sync_time
 
 full_df, last_sync = load_all_data()
 
 # =========================
-# 5. PAGE ACCUEIL
+# 5. LOGIQUE DES PAGES
 # =========================
+
+# --- PAGE ACCUEIL ---
 if st.session_state.page == "home":
     st.title("Performances Tristan 🏊‍♂️")
     
@@ -137,11 +144,12 @@ if st.session_state.page == "home":
             with tabs[i]:
                 tag = filters[label]
                 matches = [n for n in all_names if tag in n.upper()]
-                # Tri numérique (50, 100, 200...)
+                # Tri logique (50, 100, 200, 400...)
                 matches = sorted(matches, key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
 
                 if matches:
+                    # Utilisation de colonnes fictives pour forcer l'alignement Flexbox via CSS
                     cols = st.columns(len(matches))
                     for idx, epreuve in enumerate(matches):
                         with cols[idx]:
-                            if st.button(epreuve, key=f"btn_{epreuve}_{st.session_state.
+                            if st.button(ep
