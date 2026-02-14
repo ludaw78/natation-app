@@ -23,32 +23,44 @@ def update_bassin():
     st.session_state.bassin = st.session_state.bassin_radio
 
 # =========================
-# CSS (Design original)
+# CSS : ALIGNEMENT FLUIDE (FLEX)
 # =========================
 st.markdown("""
 <style>
+/* Style des boutons originaux */
 div.stButton > button {
-    width: 100% !important;
-    height: 50px !important;
+    width: auto !important; /* Largeur automatique selon le texte */
+    min-width: 80px !important;
+    height: 45px !important;
     background-color: #4CAF50 !important;
     color: white !important;
     border-radius: 10px !important;
     border: none !important;
     font-weight: bold !important;
+    padding: 0 15px !important;
+    margin-right: 5px !important;
 }
-div.stButton > button p { color: white !important; }
-.small-font {
-    font-size:12px !important;
-    color: gray;
-    font-style: italic;
-    text-align: center;
+
+/* Force l'alignement horizontal fluide */
+[data-testid="stHorizontalBlock"] {
+    display: flex !important;
+    flex-wrap: wrap !important; /* Autorise le passage à la ligne */
+    flex-direction: row !important;
+    justify-content: flex-start !important;
+    gap: 10px !important;
 }
+
+/* Désactive la rigidité des colonnes de Streamlit */
+[data-testid="column"] {
+    width: auto !important;
+    flex: 0 1 auto !important;
+    min-width: auto !important;
+}
+
+.small-font { font-size:12px !important; color: gray; font-style: italic; text-align: center; }
 </style>
 """, unsafe_allow_html=True)
 
-# =========================
-# Scraping & Tri
-# =========================
 @st.cache_data(ttl=600)
 def load_all_data():
     idrch_id = "3518107"
@@ -86,26 +98,25 @@ if st.session_state.page == "home":
         tabs = st.tabs(tab_list)
         filters = {"Nage Libre": "NL", "Brasse": "BRA.", "Papillon": "PAP.", "Dos": "DOS", "4 Nages": "4 N."}
         
-        all_epreuves = df_current["Épreuve"].unique().tolist()
-        
+        all_names = df_current["Épreuve"].unique()
+
         for i, label in enumerate(tab_list):
             with tabs[i]:
                 tag = filters[label]
-                matches = [e for e in all_epreuves if tag in e.upper()]
-                
-                # TRI NUMÉRIQUE (50, 100, 200, 400, 800)
+                matches = [n for n in all_names if tag in n.upper()]
+                # TRI NUMÉRIQUE (50, 100, 200...)
                 matches = sorted(matches, key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
-                
-                if not matches:
-                    st.info("Aucune épreuve trouvée.")
-                else:
-                    cols = st.columns(3)
-                    for j, epreuve in enumerate(matches):
-                        if cols[j % 3].button(epreuve, key=f"btn_{epreuve}_{st.session_state.bassin}"):
-                            st.session_state.nage = epreuve
-                            st.session_state.page = "perf"
-                            st.rerun()
 
+                if matches:
+                    # On crée autant de colonnes que d'épreuves pour permettre le flux horizontal
+                    cols = st.columns(len(matches))
+                    for idx, epreuve in enumerate(matches):
+                        with cols[idx]:
+                            if st.button(epreuve, key=f"btn_{epreuve}_{st.session_state.bassin}"):
+                                st.session_state.nage = epreuve
+                                st.session_state.page = "perf"
+                                st.rerun()
+    
     st.markdown("---")
     st.markdown(f'<p class="small-font">Dernière mise à jour FFN : {last_sync}</p>', unsafe_allow_html=True)
 
@@ -117,14 +128,11 @@ elif st.session_state.page == "perf":
 
     nage_choisie = st.session_state.nage
     df_nage = df_current[df_current["Épreuve"] == nage_choisie].sort_values("Date", ascending=False)
-    st.title(f"{nage_choisie} ({st.session_state.bassin})")
+    st.title(f"{nage_choisie}")
 
     if not df_nage.empty:
-        table_df = df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]].copy()
-        table_df["Date"] = table_df["Date"].dt.date
-        st.dataframe(table_df, use_container_width=True)
-
+        st.dataframe(df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]], use_container_width=True)
         df_graph = df_nage.sort_values("Date")
         fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Progression")
-        fig.update_traces(mode="lines+markers", marker=dict(size=10, color="#4CAF50"), line=dict(color="#4CAF50"))
+        fig.update_traces(mode="lines+markers", marker=dict(color="#4CAF50"))
         st.plotly_chart(fig, use_container_width=True)
