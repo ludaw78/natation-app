@@ -23,40 +23,37 @@ def update_bassin():
     st.session_state.bassin = st.session_state.bassin_radio
 
 # =========================
-# CSS : GRILLE 3 COLONNES FIXE
+# CSS (GRILLE 3 COLONNES)
 # =========================
 st.markdown("""
 <style>
-/* Style des boutons verts */
 div.stButton > button {
     width: 100% !important;
-    height: 50px !important;
+    height: 45px !important;
     background-color: #4CAF50 !important;
     color: white !important;
-    border-radius: 10px !important;
-    border: none !important;
+    border-radius: 8px !important;
     font-weight: bold !important;
+    margin-bottom: 5px !important;
 }
-div.stButton > button p { color: white !important; }
+.small-font { font-size:11px !important; color: gray; font-style: italic; text-align: center; }
 
-/* FORCE L'AFFICHAGE EN COLONNES MÊME SUR MOBILE */
+/* Forçage de l'alignement horizontal sur mobile (3 colonnes) */
 [data-testid="column"] {
-    width: 32% !important;
-    flex: 1 1 32% !important;
-    min-width: 32% !important;
+    min-width: 30% !important;
+    flex: 1 1 30% !important;
 }
-
-.small-font { font-size:12px !important; color: gray; font-style: italic; text-align: center; }
 </style>
 """, unsafe_allow_html=True)
 
 # =========================
-# SCRAPING
+# Scraping & Tri
 # =========================
 @st.cache_data(ttl=600)
 def load_all_data():
     idrch_id = "3518107"
     results = []
+    # Capture de la date et de l'heure
     sync_time = datetime.now().strftime("%d/%m/%Y à %H:%M")
     
     for b_code, b_label in [("25", "25m"), ("50", "50m")]:
@@ -64,11 +61,10 @@ def load_all_data():
         try:
             response = requests.get(url, timeout=10)
             html = response.text
-            pattern = re.compile(r'<tr[^>]*>.*?<th[^>]*>([^<]+)</th>.*?<td[^>]*font-bold[^>]*>(?:<button[^>]*>)?(?:<a[^>]*>)?\s*([\d:.]+)\s*(?:</a>)?(?:</button>)?</td>.*?<td[^>]*>\(([^)]+)\)</td>.*?<td[^>]*italic[^>]*>([^<]+)</td>.*?<p>([A-ZÀ-ÿ\s-]+)</p>\s*<p>\(([A-Z]+)\)</p>.*?<td[^>]*>(\dots*)', re.DOTALL) # Simplifié pour l'exemple
-            # Note: J'utilise ici ta logique de regex complète habituelle
             pattern = re.compile(r'<tr[^>]*>.*?<th[^>]*>([^<]+)</th>.*?<td[^>]*font-bold[^>]*>(?:<button[^>]*>)?(?:<a[^>]*>)?\s*([\d:.]+)\s*(?:</a>)?(?:</button>)?</td>.*?<td[^>]*>\(([^)]+)\)</td>.*?<td[^>]*italic[^>]*>([^<]+)</td>.*?<p>([A-ZÀ-ÿ\s-]+)</p>\s*<p>\(([A-Z]+)\)</p>.*?<td[^>]*>(\d{2}/\d{2}/\d{4})</td>.*?<td[^>]*>(\[[^\]]+\])</td>.*?href="([^"]*resultats\.php[^"]*)".*?</td>\s*<td[^>]*>([^<]+)</td>', re.DOTALL)
             matches = pattern.findall(html)
             for m in matches:
+                # Nettoyage profond du nom de l'épreuve
                 name = re.sub(r'[^a-zA-Z0-9\.\s]', '', m[0]).strip()
                 results.append([name] + list(m[1:]) + [b_label])
         except: continue
@@ -88,31 +84,33 @@ if st.session_state.page == "home":
     st.radio("Bassin", ["25m", "50m"], index=["25m","50m"].index(st.session_state.bassin), horizontal=True, key="bassin_radio", on_change=update_bassin)
 
     if not df_current.empty:
-        tab_list = ["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"]
-        tabs = st.tabs(tab_list)
+        tab_labels = ["Nage Libre", "Brasse", "Papillon", "Dos", "4 Nages"]
+        tabs = st.tabs(tab_labels)
         filters = {"Nage Libre": "NL", "Brasse": "BRA.", "Papillon": "PAP.", "Dos": "DOS", "4 Nages": "4 N."}
         
         all_names = df_current["Épreuve"].unique()
 
-        for i, label in enumerate(tab_list):
+        for i, label in enumerate(tab_labels):
             with tabs[i]:
                 tag = filters[label]
                 matches = [n for n in all_names if tag in n.upper()]
-                # TRI NUMÉRIQUE (50, 100, 200...)
+                
+                # TRI MATHÉMATIQUE (50, 100, 200, 400, 800)
                 matches = sorted(matches, key=lambda x: int(''.join(c for c in x if c.isdigit())) if any(c.isdigit() for c in x) else 0)
 
                 if matches:
-                    # Affichage par lignes de 3 colonnes
+                    # Rétablissement de la grille de 3 colonnes
                     for j in range(0, len(matches), 3):
                         row_matches = matches[j:j+3]
                         cols = st.columns(3)
                         for idx, epreuve in enumerate(row_matches):
-                            if cols[idx].button(epreuve, key=f"btn_{epreuve}_{i}_{j}_{idx}"):
+                            if cols[idx].button(epreuve, key=f"btn_{epreuve}_{st.session_state.bassin}"):
                                 st.session_state.nage = epreuve
                                 st.session_state.page = "perf"
                                 st.rerun()
-
+    
     st.markdown("---")
+    # Date + Heure de mise à jour
     st.markdown(f'<p class="small-font">Dernière mise à jour FFN : {last_sync}</p>', unsafe_allow_html=True)
 
 # --- PAGE PERFORMANCE ---
@@ -120,13 +118,16 @@ elif st.session_state.page == "perf":
     if st.button("⬅ Retour"):
         st.session_state.page = "home"
         st.rerun()
-    
+
     nage_choisie = st.session_state.nage
     df_nage = df_current[df_current["Épreuve"] == nage_choisie].sort_values("Date", ascending=False)
     st.title(f"{nage_choisie}")
 
     if not df_nage.empty:
+        # Tableau des temps
         st.dataframe(df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]], use_container_width=True)
+        
+        # Graphique de progression
         df_graph = df_nage.sort_values("Date")
         fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Progression")
         fig.update_traces(mode="lines+markers", marker=dict(color="#4CAF50"))
