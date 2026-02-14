@@ -152,4 +152,44 @@ if st.session_state.page == "home":
                     cols = st.columns(len(matches))
                     for idx, epreuve in enumerate(matches):
                         with cols[idx]:
-                            if st.button(ep
+                            if st.button(epreuve, key=f"btn_{epreuve}"):
+                                st.session_state.nage = epreuve
+                                st.session_state.page = "perf"
+                                st.rerun()
+    
+    st.markdown("---")
+    st.markdown(f'<p class="small-font">Dernière mise à jour FFN : {last_sync}</p>', unsafe_allow_html=True)
+
+# --- PAGE PERFORMANCE ---
+elif st.session_state.page == "perf":
+    if st.button("⬅ Retour"):
+        st.session_state.page = "home"
+        st.rerun()
+
+    st.title(f"{st.session_state.nage}")
+    
+    # Filtre bassin compact sous le titre
+    st.radio("Changer de bassin :", ["25m", "50m"], 
+             index=["25m","50m"].index(st.session_state.bassin), 
+             horizontal=True, key="bassin_radio", on_change=update_bassin)
+
+    df_nage = full_df[(full_df["Épreuve"] == st.session_state.nage) & (full_df["Bassin_Type"] == st.session_state.bassin)].sort_values("Date", ascending=False)
+
+    if not df_nage.empty:
+        # Mise en évidence Rose de la meilleure perf (Record Personnel)
+        best_idx = df_nage["Temps_sec"].idxmin()
+        table_df = df_nage[["Date","Temps","Âge","Points","Ville","Catégorie"]].copy()
+        table_df["Date"] = table_df["Date"].dt.date
+        
+        st.dataframe(
+            table_df.style.apply(lambda row: ['background-color: #ffe4e1' if row.name == best_idx else '' for _ in row], axis=1), 
+            use_container_width=True
+        )
+        
+        # Graphique de progression
+        df_graph = df_nage.sort_values("Date")
+        fig = px.scatter(df_graph, x="Date", y="Temps_sec", text="Temps", title="Évolution des performances")
+        fig.update_traces(mode="lines+markers", marker=dict(size=10, color="#4CAF50"), line=dict(color="#4CAF50"))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info(f"Aucune donnée enregistrée en {st.session_state.bassin} pour cette nage.")
