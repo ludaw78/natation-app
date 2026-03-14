@@ -126,6 +126,58 @@ BIRTH_YEAR = 2011
 SEP_CHAMP  = "§"
 SEP_SPLIT  = ";"
 
+# Codes épreuves FFN
+EPREUVE_CODES = {
+    "50 NL": 51, "100 NL": 52, "200 NL": 53, "400 NL": 54, "800 NL": 55, "1500 NL": 56,
+    "50 Dos": 61, "100 Dos": 62, "200 Dos": 63,
+    "50 Bra": 71, "100 Bra": 72, "200 Bra": 73,
+    "50 Pap": 81, "100 Pap": 82, "200 Pap": 83,
+    "100 4 N": 90, "200 4 N": 91, "400 4 N": 92,
+}
+
+def current_season_year() -> int:
+    """idsai = année civile courante."""
+    return datetime.now().year
+
+def epreuve_to_code(epreuve: str) -> Optional[int]:
+    """Convertit un nom d'épreuve FFN en idepr. Ex: '50 NL' -> 51."""
+    n = epreuve.upper().strip()
+    # Normalisation : "50 LIBRE" -> "50 NL", "100 BRASSE" -> "100 Bra", etc.
+    for key in EPREUVE_CODES:
+        ku = key.upper()
+        if ku == n: return EPREUVE_CODES[key]
+    # Tentative partielle
+    for key, code in EPREUVE_CODES.items():
+        parts = key.upper().split()
+        if all(p in n for p in parts): return code
+    return None
+
+def parse_ranking_row(html_content: str, swimmer_id: str = "3518107") -> dict:
+    """Extrait les rangs dept/région/national par catégorie depuis la page de classement FFN."""
+    result = {"dept": "-", "region": "-", "national": "-"}
+    rows = find_all(r"<tr[^>]*>(.*?)</tr>", html_content)
+    target_row = next((r for r in rows if swimmer_id in r), None)
+    if not target_row:
+        return result
+    all_tippies = re.findall(r'data-tippy-content="(.*?)"(?:\s|>)', target_row, re.DOTALL)
+    if not all_tippies:
+        all_tippies = re.findall(r"data-tippy-content='(.*?)'(?:\s|>)", target_row, re.DOTALL)
+    raw_tippy = next((t for t in all_tippies if "Rang" in html.unescape(t)), None)
+    if not raw_tippy:
+        return result
+    tippy = html.unescape(raw_tippy)
+
+    def extract_rank(pattern):
+        m = re.search(pattern, tippy, re.DOTALL)
+        if not m: return "-"
+        clean = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+        return clean.split(" : ")[0].strip()
+
+    result["national"] = extract_rank(r"Rang national par cat[^→]*→\s*<b>(.*?)</b>")
+    result["region"]   = extract_rank(r"Rang r[ée]gional[^→]*par cat[^→]*→\s*<b>(.*?)</b>")
+    result["dept"]     = extract_rank(r"Rang d[ée]part[^→]*par cat[^→]*→\s*<b>(.*?)</b>")
+    return result
+
 def encode_splits(splits: list[Split]) -> str:
     return SEP_SPLIT.join(
         f"{s.distance_m}{SEP_CHAMP}{s.cumulative_time}{SEP_CHAMP}{s.lap_time}{SEP_CHAMP}{s.half_time or ''}"
@@ -145,6 +197,7 @@ class State(rx.State):
     results_json: str = rx.LocalStorage("[]", name="swim_v91")
     last_update_str_store: str = rx.LocalStorage("0", name="up_v91")
     loading: bool = False
+    rankings_json: str = rx.LocalStorage("{}", name="rank_v94")
     dialog_open: bool = False
     dialog_key:  str = ""
     dialog_lieu: str = ""
@@ -307,16 +360,32 @@ class State(rx.State):
     def close_dialog(self):
         self.dialog_open = False
 
+    @rx.var
+    def current_rankings(self) -> dict:
+        try: return json.loads(self.rankings_json)
+        except: return {}
+
+    @rx.var
+    def selected_nage_rankings(self) -> dict:
+        """Classements pour la nage+bassin sélectionnée."""
+        # Normaliser : "50 Bra." -> "50 Bra", "200 Pap." -> "200 Pap"
+        nage = self.selected_nage.rstrip(".")
+        key = f"{nage}|{self.current_bassin}"
+        return self.current_rankings.get(key, {"dept": "—", "region": "—", "national": "—"})
+
     def force_refresh(self):
         if self.loading: return
         self.loading = True
         yield
         all_res = []
+        all_ranks = {}
         try:
+            # ── Performances ──────────────────────────────────────────
             for bc, bl in [("25", "25m"), ("50", "50m")]:
                 url = f"https://ffn.extranat.fr/webffn/nat_recherche.php?idact=nat&idrch_id=3518107&idopt=prf&idbas={bc}"
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with opener.open(req, timeout=15) as resp:
                     html_content = resp.read().decode("utf-8", errors="replace")
                 rows = find_all(r"<tr\b[^>]*class=[^>]*border-b[^>]*>(.*?)</tr>", html_content)
                 for row in rows:
@@ -329,9 +398,41 @@ class State(rx.State):
                         })
             self.results_json = json.dumps(all_res)
             self.last_update_str_store = str(time.time())
+            yield
+            # ── Classements ───────────────────────────────────────────
+            sai = current_season_year()
+            cat = sai - BIRTH_YEAR
+            for bc, bl in [("25", "25m"), ("50", "50m")]:
+                for epr_name, idepr in EPREUVE_CODES.items():
+                    try:
+                        url_dep = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}&iddep=1611"
+                        req = urllib.request.Request(url_dep, headers={"User-Agent": "Mozilla/5.0"})
+                        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                        with opener.open(req, timeout=10) as resp:
+                            html_content = resp.read().decode("utf-8", errors="replace")
+                        all_ranks[f"{epr_name}|{bl}"] = parse_ranking_row(html_content)
+                    except:
+                        all_ranks[f"{epr_name}|{bl}"] = {"dept": "-", "region": "-", "national": "-"}
+            self.rankings_json = json.dumps(all_ranks)
         finally:
             self.loading = False
             yield
+
+    @rx.var
+    def ranking_national_txt(self) -> str:
+        return self.selected_nage_rankings.get("national", "-")
+
+    @rx.var
+    def ranking_region_txt(self) -> str:
+        return self.selected_nage_rankings.get("region", "-")
+
+    @rx.var
+    def ranking_dept_txt(self) -> str:
+        return self.selected_nage_rankings.get("dept", "-")
+
+    @rx.var
+    def ranking_title(self) -> str:
+        return f"Classement {current_season_year()} U{current_season_year() - BIRTH_YEAR}"
 
     def nav_to_nage(self, n): return rx.redirect(f"/?nage={n}")
     def nav_back(self): return rx.redirect("/")
@@ -496,6 +597,51 @@ def index():
                         ),
                     ),
                     width="100%",
+                ),
+                # ── Classements ──────────────────────────────────────
+                rx.vstack(
+                    rx.text(State.ranking_title, font_size="0.72em", font_weight="bold", color=rx.color("gray", 11)),
+                    rx.hstack(
+                        # France
+                        rx.vstack(
+                            rx.hstack(
+                                rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'),
+                                rx.text("France", font_size="0.7em", color=rx.color("gray", 11)),
+                                spacing="1", align="center",
+                            ),
+                            rx.text(State.ranking_national_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
+                            spacing="0", align_items="center", flex_grow="1",
+                        ),
+                        rx.divider(orientation="vertical", height="32px"),
+                        # Région
+                        rx.vstack(
+                            rx.hstack(
+                                rx.text("🏔", font_size="0.8em"),
+                                rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)),
+                                spacing="1", align="center",
+                            ),
+                            rx.text(State.ranking_region_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
+                            spacing="0", align_items="center", flex_grow="1",
+                        ),
+                        rx.divider(orientation="vertical", height="32px"),
+                        # Département
+                        rx.vstack(
+                            rx.hstack(
+                                rx.text("📍", font_size="0.8em"),
+                                rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)),
+                                spacing="1", align="center",
+                            ),
+                            rx.text(State.ranking_dept_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
+                            spacing="0", align_items="center", flex_grow="1",
+                        ),
+                        width="100%", align="center",
+                    ),
+                    spacing="2", align_items="start",
+                    width="100%",
+                    padding="10px 12px",
+                    border_radius="8px",
+                    background_color=rx.color("gray", 2),
+                    border="1px solid var(--gray-4)",
                 ),
                 rx.table.root(
                     rx.table.header(
