@@ -9,6 +9,8 @@ import numpy as np
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, Union
+from concurrent.futures import ThreadPoolExecutor
+from pydantic import BaseModel
 
 # ── 1. PARSEUR ───────────────────────────────────────────────────────────────
 
@@ -96,19 +98,19 @@ def parse_row(row: str, base_url: str = "https://ffn.extranat.fr") -> Optional[P
 
 # ── 2. TYPES REFLEX ──────────────────────────────────────────────────────────
 
-class SplitRow(rx.Base):
+class SplitRow(BaseModel):
     dist:    str
     cumul:   str
     partiel: str
     half:    str
 
-class Top10Entry(rx.Base):
+class Top10Entry(BaseModel):
     rang:  str
     nom:   str
     temps: str
     moi:   bool
 
-class Result(rx.Base):
+class Result(BaseModel):
     E: str
     T: str
     P: str
@@ -144,19 +146,6 @@ EPREUVE_CODES = {
 def current_season_year() -> int:
     """idsai = année civile courante."""
     return datetime.now().year
-
-def epreuve_to_code(epreuve: str) -> Optional[int]:
-    """Convertit un nom d'épreuve FFN en idepr. Ex: '50 NL' -> 51."""
-    n = epreuve.upper().strip()
-    # Normalisation : "50 LIBRE" -> "50 NL", "100 BRASSE" -> "100 Bra", etc.
-    for key in EPREUVE_CODES:
-        ku = key.upper()
-        if ku == n: return EPREUVE_CODES[key]
-    # Tentative partielle
-    for key, code in EPREUVE_CODES.items():
-        parts = key.upper().split()
-        if all(p in n for p in parts): return code
-    return None
 
 def parse_ranking_row(html_content: str, swimmer_id: str = "3518107") -> dict:
     """Extrait les rangs dept/région/national par catégorie depuis la page de classement FFN."""
@@ -196,8 +185,11 @@ def parse_top10(html_content: str, swimmer_id: str = "3518107") -> list:
         rang = strip_tags(tds[0]).rstrip(".")
         if not rang.isdigit(): continue
         nom = strip_tags(ths[0])
-        # Nettoyer : garder juste "NOM Prénom (année/age)"
-        nom = re.sub(r'\s+', ' ', nom).strip()
+        try:
+            nom = re.sub(r'\s*\(\d{4}\s*/\s*\d+\s*ans\)\s*[A-Z]{2,3}\s*$', '', nom)
+            nom = re.sub(r'\s+', ' ', nom).strip()
+        except:
+            pass
         # Extraire temps (4e td généralement)
         temps = strip_tags(tds[2]) if len(tds) > 2 else "-"
         is_tristan = swimmer_id in row
@@ -207,18 +199,42 @@ def parse_top10(html_content: str, swimmer_id: str = "3518107") -> list:
     return result
 
 
-    return SEP_SPLIT.join(
-        f"{s.distance_m}{SEP_CHAMP}{s.cumulative_time}{SEP_CHAMP}{s.lap_time}{SEP_CHAMP}{s.half_time or ''}"
-        for s in splits
-    )
-
-# ── 4. STATE ─────────────────────────────────────────────────────────────────
-
 def encode_splits(splits: list[Split]) -> str:
     return SEP_SPLIT.join(
         f"{s.distance_m}{SEP_CHAMP}{s.cumulative_time}{SEP_CHAMP}{s.lap_time}{SEP_CHAMP}{s.half_time or ''}"
         for s in splits
     )
+
+def _fetch_url(url: str) -> str:
+    """Fetch HTTP avec headers complets imitant Chrome."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9",
+        "Referer": "https://ffn.extranat.fr/webffn/nat_rankings.php",
+        "Connection": "keep-alive",
+    }
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    req = urllib.request.Request(url, headers=headers)
+    with opener.open(req, timeout=15) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+def _fetch_ranking_task(args: tuple) -> tuple:
+    """Tâche parallélisable : fetche les 3 URLs d'une épreuve+bassin."""
+    bc, bl, epr_name, idepr, sai, cat = args
+    base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}"
+    try:
+        h = _fetch_url(base + "&iddep=1611")
+        rank    = parse_ranking_row(h)
+        top_dep = parse_top10(h)
+    except:
+        rank    = {"dept": "-", "region": "-", "national": "-"}
+        top_dep = []
+    try:    top_nat  = parse_top10(_fetch_url(base))
+    except: top_nat  = []
+    try:    top_aura = parse_top10(_fetch_url(base + "&idreg=3004"))
+    except: top_aura = []
+    return (bl, epr_name, rank, top_dep, top_nat, top_aura)
 
 def flag_svg():
     return rx.box(
@@ -228,11 +244,12 @@ def flag_svg():
 
 class State(rx.State):
     current_bassin: str = "50m"
-    results_json: str = rx.LocalStorage("[]", name="swim_v91")
-    last_update_str_store: str = rx.LocalStorage("0", name="up_v91")
+    current_tab: str = "nl"
+    results_json: str = rx.LocalStorage("[]", name="swim_v92")
+    last_update_str_store: str = rx.LocalStorage("0", name="up_v92")
     loading: bool = False
-    rankings_json: str = rx.LocalStorage("{}", name="rank_v94")
-    top10_json: str = rx.LocalStorage("{}", name="top10_v2")
+    rankings_json: str = rx.LocalStorage("{}", name="rank_v95")
+    top10_json: str = rx.LocalStorage("{}", name="top10_v3")
     top10_dialog_open: bool = False
     top10_dialog_title: str = ""
     top10_dialog_key: str = ""
@@ -246,7 +263,10 @@ class State(rx.State):
 
     @rx.var
     def selected_nage(self) -> str:
-        try: return self.router.page.params.get("nage", "")
+        try:
+            import urllib.parse
+            params = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(self.router.url).query))
+            return params.get("nage", "")
         except: return ""
 
     def change_bassin(self, v: Union[str, list[str]]):
@@ -427,14 +447,6 @@ class State(rx.State):
         if self.loading: return
         self.loading = True
         yield
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        def fetch_url(url):
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            with opener.open(req, timeout=10) as resp:
-                return resp.read().decode("utf-8", errors="replace")
-
         all_res = []
         all_ranks = {}
         all_top10 = {}
@@ -445,56 +457,35 @@ class State(rx.State):
             # ── 1. Performances (séquentiel, 2 requêtes) ─────────────
             for bc, bl in [("25", "25m"), ("50", "50m")]:
                 url = f"https://ffn.extranat.fr/webffn/nat_recherche.php?idact=nat&idrch_id=3518107&idopt=prf&idbas={bc}"
-                try:
-                    html_content = fetch_url(url)
-                    rows = find_all(r"<tr\b[^>]*class=[^>]*border-b[^>]*>(.*?)</tr>", html_content)
-                    for row in rows:
-                        perf = parse_row(row)
-                        if perf:
-                            all_res.append({
-                                "E": perf.epreuve, "T": perf.temps_final, "P": perf.points,
-                                "D": perf.date, "B": bl, "S": encode_splits(perf.splits),
-                                "N": perf.competition, "V": perf.type_compet,
-                            })
-                except: pass
+                html_content = _fetch_url(url)
+                rows = find_all(r"<tr\b[^>]*class=[^>]*border-b[^>]*>(.*?)</tr>", html_content)
+                for row in rows:
+                    perf = parse_row(row)
+                    if perf:
+                        all_res.append({
+                            "E": perf.epreuve, "T": perf.temps_final, "P": perf.points,
+                            "D": perf.date, "B": bl, "S": encode_splits(perf.splits),
+                            "N": perf.competition, "V": perf.type_compet,
+                        })
             self.results_json = json.dumps(all_res)
             self.last_update_str_store = str(time.time())
             yield
 
-            # ── 2. Isère en parallèle (36 requêtes) → classements + top10 dept ──
-            def fetch_isere(bc, bl, epr_name, idepr):
-                base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}"
-                try:
-                    h = fetch_url(base + "&iddep=1611")
-                    return (bl, epr_name, parse_ranking_row(h), parse_top10(h))
-                except:
-                    return (bl, epr_name, {"dept": "-", "region": "-", "national": "-"}, [])
-
-            tasks_isere = [(bc, bl, n, c) for bc, bl in [("25","25m"),("50","50m")] for n, c in EPREUVE_CODES.items()]
-            with ThreadPoolExecutor(max_workers=12) as ex:
-                for bl, epr_name, rank, top_dept in ex.map(lambda t: fetch_isere(*t), tasks_isere):
-                    all_ranks[f"{epr_name}|{bl}"]      = rank
-                    all_top10[f"{epr_name}|{bl}|dept"] = top_dept
-
-            self.rankings_json = json.dumps(all_ranks)
-            self.top10_json    = json.dumps(all_top10)
-            yield
-
-            # ── 3. France + AURA en parallèle (72 requêtes) → top10 ──
-            def fetch_nat_aura(bc, bl, epr_name, idepr):
-                base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}"
-                try:    top_nat  = parse_top10(fetch_url(base))
-                except: top_nat  = []
-                try:    top_aura = parse_top10(fetch_url(base + "&idreg=3004"))
-                except: top_aura = []
-                return (bl, epr_name, top_nat, top_aura)
-
-            with ThreadPoolExecutor(max_workers=12) as ex:
-                for bl, epr_name, top_nat, top_aura in ex.map(lambda t: fetch_nat_aura(*t), tasks_isere):
+            # ── 2+3. Classements + top10 en parallèle (108 requêtes) ─
+            tasks = [
+                (bc, bl, epr_name, idepr, sai, cat)
+                for bc, bl in [("25", "25m"), ("50", "50m")]
+                for epr_name, idepr in EPREUVE_CODES.items()
+            ]
+            with ThreadPoolExecutor(max_workers=10) as ex:
+                for bl, epr_name, rank, top_dep, top_nat, top_aura in ex.map(_fetch_ranking_task, tasks):
+                    all_ranks[f"{epr_name}|{bl}"]          = rank
+                    all_top10[f"{epr_name}|{bl}|dept"]     = top_dep
                     all_top10[f"{epr_name}|{bl}|national"] = top_nat
                     all_top10[f"{epr_name}|{bl}|region"]   = top_aura
 
-            self.top10_json = json.dumps(all_top10)
+            self.rankings_json = json.dumps(all_ranks)
+            self.top10_json    = json.dumps(all_top10)
 
         finally:
             self.loading = False
@@ -536,6 +527,9 @@ class State(rx.State):
 
     def close_top10(self):
         self.top10_dialog_open = False
+
+    def change_tab(self, tab: str):
+        self.current_tab = tab
 
     def nav_to_nage(self, n): return rx.redirect(f"/?nage={n}")
     def nav_back(self): return rx.redirect("/")
@@ -716,7 +710,9 @@ def index():
                             rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("4 N"), rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="4n"),
                             min_height="350px", width="100%",
                         ),
-                        default_value="nl", width="100%",
+                        value=State.current_tab,
+                        on_change=State.change_tab,
+                        width="100%",
                     ),
                     width="100%", align_items="start", spacing="0",
                 ),
