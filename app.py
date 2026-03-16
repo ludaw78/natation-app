@@ -102,6 +102,12 @@ class SplitRow(rx.Base):
     partiel: str
     half:    str
 
+class Top10Entry(rx.Base):
+    rang:  str
+    nom:   str
+    temps: str
+    moi:   bool
+
 class Result(rx.Base):
     E: str
     T: str
@@ -178,13 +184,41 @@ def parse_ranking_row(html_content: str, swimmer_id: str = "3518107") -> dict:
     result["dept"]     = extract_rank(r"Rang d[ée]part[^→]*par cat[^→]*→\s*<b>(.*?)</b>")
     return result
 
-def encode_splits(splits: list[Split]) -> str:
+def parse_top10(html_content: str, swimmer_id: str = "3518107") -> list:
+    """Extrait les 10 premiers nageurs du classement. Marque Tristan avec is_tristan=True."""
+    result = []
+    rows = find_all(r"<tr[^>]*>(.*?)</tr>", html_content)
+    count = 0
+    for row in rows:
+        tds = find_all(r"<td[^>]*>(.*?)</td>", row)
+        ths = find_all(r"<th[^>]*>(.*?)</th>", row)
+        if not tds or not ths: continue
+        rang = strip_tags(tds[0]).rstrip(".")
+        if not rang.isdigit(): continue
+        nom = strip_tags(ths[0])
+        # Nettoyer : garder juste "NOM Prénom (année/age)"
+        nom = re.sub(r'\s+', ' ', nom).strip()
+        # Extraire temps (4e td généralement)
+        temps = strip_tags(tds[2]) if len(tds) > 2 else "-"
+        is_tristan = swimmer_id in row
+        result.append({"rang": rang, "nom": nom, "temps": temps, "moi": is_tristan})
+        count += 1
+        if count >= 10: break
+    return result
+
+
     return SEP_SPLIT.join(
         f"{s.distance_m}{SEP_CHAMP}{s.cumulative_time}{SEP_CHAMP}{s.lap_time}{SEP_CHAMP}{s.half_time or ''}"
         for s in splits
     )
 
 # ── 4. STATE ─────────────────────────────────────────────────────────────────
+
+def encode_splits(splits: list[Split]) -> str:
+    return SEP_SPLIT.join(
+        f"{s.distance_m}{SEP_CHAMP}{s.cumulative_time}{SEP_CHAMP}{s.lap_time}{SEP_CHAMP}{s.half_time or ''}"
+        for s in splits
+    )
 
 def flag_svg():
     return rx.box(
@@ -198,6 +232,10 @@ class State(rx.State):
     last_update_str_store: str = rx.LocalStorage("0", name="up_v91")
     loading: bool = False
     rankings_json: str = rx.LocalStorage("{}", name="rank_v94")
+    top10_json: str = rx.LocalStorage("{}", name="top10_v2")
+    top10_dialog_open: bool = False
+    top10_dialog_title: str = ""
+    top10_dialog_key: str = ""
     dialog_open: bool = False
     dialog_key:  str = ""
     dialog_lieu: str = ""
@@ -215,7 +253,7 @@ class State(rx.State):
         self.current_bassin = v[0] if isinstance(v, list) else v
 
     @rx.var
-    def current_category(self) -> str: return f"U{2026 - BIRTH_YEAR}"
+    def current_category(self) -> str: return f"U{current_season_year() - BIRTH_YEAR}"
 
     def to_sec(self, t):
         try:
@@ -240,6 +278,18 @@ class State(rx.State):
     def qualif_time_val(self) -> str:
         if self.current_bassin != "50m": return ""
         return GRILLE_QUALIF_FULL.get(self.current_category, {}).get(self.get_qualif_key(self.selected_nage), "")
+
+    @rx.var
+    def qualif_time_formatted(self) -> str:
+        """Formate le temps de qualif au même format que FFN : MM:SS.ss ou 00:SS.ss."""
+        t = self.qualif_time_val
+        if not t: return ""
+        try:
+            secs = self.to_sec(t)
+            m = int(secs // 60)
+            s = secs - m * 60
+            return f"{m:02d}:{s:05.2f}"
+        except: return t
 
     @rx.var
     def gap_to_qualif_txt(self) -> str:
@@ -296,7 +346,7 @@ class State(rx.State):
         tick_vals = np.linspace(min_v, max_v, 5)
         if self.current_bassin == "50m" and q_val:
             f.add_hline(y=self.to_sec(q_val), line_dash="dash", line_color="#ef4444", line_width=2,
-                        annotation_text=f"Cible {self.current_category} ({q_val})",
+                        annotation_text=f"Qualif. {self.current_category} ({q_val})",
                         annotation_position="top left", annotation_font_size=11, annotation_font_color="#ef4444")
         f.update_layout(
             yaxis=dict(tickmode='array', tickvals=tick_vals, ticktext=[self.format_min_sec_short(v) for v in tick_vals]),
@@ -377,43 +427,75 @@ class State(rx.State):
         if self.loading: return
         self.loading = True
         yield
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def fetch_url(url):
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(req, timeout=10) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+
         all_res = []
         all_ranks = {}
+        all_top10 = {}
+        sai = current_season_year()
+        cat = sai - BIRTH_YEAR
+
         try:
-            # ── Performances ──────────────────────────────────────────
+            # ── 1. Performances (séquentiel, 2 requêtes) ─────────────
             for bc, bl in [("25", "25m"), ("50", "50m")]:
                 url = f"https://ffn.extranat.fr/webffn/nat_recherche.php?idact=nat&idrch_id=3518107&idopt=prf&idbas={bc}"
-                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                with opener.open(req, timeout=15) as resp:
-                    html_content = resp.read().decode("utf-8", errors="replace")
-                rows = find_all(r"<tr\b[^>]*class=[^>]*border-b[^>]*>(.*?)</tr>", html_content)
-                for row in rows:
-                    perf = parse_row(row)
-                    if perf:
-                        all_res.append({
-                            "E": perf.epreuve, "T": perf.temps_final, "P": perf.points,
-                            "D": perf.date, "B": bl, "S": encode_splits(perf.splits),
-                            "N": perf.competition, "V": perf.type_compet,
-                        })
+                try:
+                    html_content = fetch_url(url)
+                    rows = find_all(r"<tr\b[^>]*class=[^>]*border-b[^>]*>(.*?)</tr>", html_content)
+                    for row in rows:
+                        perf = parse_row(row)
+                        if perf:
+                            all_res.append({
+                                "E": perf.epreuve, "T": perf.temps_final, "P": perf.points,
+                                "D": perf.date, "B": bl, "S": encode_splits(perf.splits),
+                                "N": perf.competition, "V": perf.type_compet,
+                            })
+                except: pass
             self.results_json = json.dumps(all_res)
             self.last_update_str_store = str(time.time())
             yield
-            # ── Classements ───────────────────────────────────────────
-            sai = current_season_year()
-            cat = sai - BIRTH_YEAR
-            for bc, bl in [("25", "25m"), ("50", "50m")]:
-                for epr_name, idepr in EPREUVE_CODES.items():
-                    try:
-                        url_dep = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}&iddep=1611"
-                        req = urllib.request.Request(url_dep, headers={"User-Agent": "Mozilla/5.0"})
-                        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                        with opener.open(req, timeout=10) as resp:
-                            html_content = resp.read().decode("utf-8", errors="replace")
-                        all_ranks[f"{epr_name}|{bl}"] = parse_ranking_row(html_content)
-                    except:
-                        all_ranks[f"{epr_name}|{bl}"] = {"dept": "-", "region": "-", "national": "-"}
+
+            # ── 2. Isère en parallèle (36 requêtes) → classements + top10 dept ──
+            def fetch_isere(bc, bl, epr_name, idepr):
+                base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}"
+                try:
+                    h = fetch_url(base + "&iddep=1611")
+                    return (bl, epr_name, parse_ranking_row(h), parse_top10(h))
+                except:
+                    return (bl, epr_name, {"dept": "-", "region": "-", "national": "-"}, [])
+
+            tasks_isere = [(bc, bl, n, c) for bc, bl in [("25","25m"),("50","50m")] for n, c in EPREUVE_CODES.items()]
+            with ThreadPoolExecutor(max_workers=12) as ex:
+                for bl, epr_name, rank, top_dept in ex.map(lambda t: fetch_isere(*t), tasks_isere):
+                    all_ranks[f"{epr_name}|{bl}"]      = rank
+                    all_top10[f"{epr_name}|{bl}|dept"] = top_dept
+
             self.rankings_json = json.dumps(all_ranks)
+            self.top10_json    = json.dumps(all_top10)
+            yield
+
+            # ── 3. France + AURA en parallèle (72 requêtes) → top10 ──
+            def fetch_nat_aura(bc, bl, epr_name, idepr):
+                base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}"
+                try:    top_nat  = parse_top10(fetch_url(base))
+                except: top_nat  = []
+                try:    top_aura = parse_top10(fetch_url(base + "&idreg=3004"))
+                except: top_aura = []
+                return (bl, epr_name, top_nat, top_aura)
+
+            with ThreadPoolExecutor(max_workers=12) as ex:
+                for bl, epr_name, top_nat, top_aura in ex.map(lambda t: fetch_nat_aura(*t), tasks_isere):
+                    all_top10[f"{epr_name}|{bl}|national"] = top_nat
+                    all_top10[f"{epr_name}|{bl}|region"]   = top_aura
+
+            self.top10_json = json.dumps(all_top10)
+
         finally:
             self.loading = False
             yield
@@ -434,10 +516,85 @@ class State(rx.State):
     def ranking_title(self) -> str:
         return f"Classement {current_season_year()} U{current_season_year() - BIRTH_YEAR}"
 
+    @rx.var
+    def top10_dialog_data(self) -> list[Top10Entry]:
+        try:
+            d = json.loads(self.top10_json)
+            entries = d.get(self.top10_dialog_key, [])
+            return [Top10Entry(**e) for e in entries]
+        except:
+            return []
+
+    def open_top10(self, scope: str):
+        """scope: 'national', 'region', 'dept'"""
+        nage = self.selected_nage.rstrip(".")
+        self.top10_dialog_key = f"{nage}|{self.current_bassin}|{scope}"
+        labels = {"national": "France", "region": "AURA", "dept": "Isère"}
+        cat = current_season_year() - BIRTH_YEAR
+        self.top10_dialog_title = f"Top 10 {labels[scope]} U{cat} — {nage} ({self.current_bassin})"
+        self.top10_dialog_open = True
+
+    def close_top10(self):
+        self.top10_dialog_open = False
+
     def nav_to_nage(self, n): return rx.redirect(f"/?nage={n}")
     def nav_back(self): return rx.redirect("/")
 
 # ── 5. COMPOSANTS UI ─────────────────────────────────────────────────────────
+
+def top10_row_ui(entry: Top10Entry) -> rx.Component:
+    return rx.hstack(
+        rx.text(entry.rang + ".",
+            font_size="0.75em", color=rx.color("gray", 10), width="26px", text_align="right",
+            font_weight=rx.cond(entry.moi, "bold", "normal"),
+        ),
+        rx.text(entry.nom,
+            font_size="0.75em", flex_grow="1",
+            color=rx.cond(entry.moi, rx.color("blue", 9), rx.color("gray", 12)),
+            font_weight=rx.cond(entry.moi, "bold", "normal"),
+        ),
+        rx.text(entry.temps,
+            font_size="0.75em", font_weight="bold",
+            color=rx.cond(entry.moi, rx.color("blue", 9), rx.color("gray", 12)),
+        ),
+        spacing="2", align="center", width="100%",
+        background_color=rx.cond(entry.moi, rx.color("blue", 2), "transparent"),
+        border_radius="4px", padding_x="4px",
+    )
+
+def top10_dialog() -> rx.Component:
+    return rx.dialog.root(
+        rx.dialog.content(
+            rx.vstack(
+                rx.hstack(
+                    rx.text(State.top10_dialog_title, font_weight="bold", font_size="0.85em", color=rx.color("gray", 12)),
+                    rx.spacer(),
+                    rx.dialog.close(
+                        rx.button(rx.icon(tag="x", size=16), variant="ghost", size="1", on_click=State.close_top10),
+                    ),
+                    width="100%", align="center",
+                ),
+                rx.divider(),
+                rx.cond(
+                    State.top10_dialog_data.length() > 0,
+                    rx.vstack(
+                        rx.foreach(State.top10_dialog_data, top10_row_ui),
+                        spacing="1", width="100%",
+                    ),
+                    rx.text("Aucune donnée", font_size="0.8em", color=rx.color("gray", 10)),
+                ),
+                spacing="3", width="100%",
+            ),
+            background_color=rx.color("gray", 1),
+            border="1px solid var(--gray-4)",
+            border_radius="16px",
+            padding="16px",
+            max_width="420px",
+            width="92vw",
+        ),
+        open=State.top10_dialog_open,
+        on_open_change=State.close_top10,
+    )
 
 def split_row_ui(s: SplitRow) -> rx.Component:
     """Avec partiel bleu (splits aux 50m) + half vert optionnel."""
@@ -519,6 +676,7 @@ def index():
     return rx.theme(
         rx.center(
         splits_dialog(),
+        top10_dialog(),
         rx.cond(
             State.selected_nage == "",
             # ── Page d'accueil ───────────────────────────────────────
@@ -591,7 +749,11 @@ def index():
                     rx.cond(
                         State.qualif_time_val != "",
                         rx.badge(
-                            rx.hstack(rx.text(State.gap_to_qualif_txt), flag_svg(), align="center"),
+                            rx.hstack(
+                                rx.html('<svg width="14" height="10" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'),
+                                rx.text(f"Qualif. {State.current_category} : {State.qualif_time_formatted}"),
+                                spacing="1", align="center",
+                            ),
                             color_scheme=rx.cond(State.gap_to_qualif_txt.contains("Qualifié"), "green", "orange"),
                             variant="soft", size="3", flex_grow="1",
                         ),
@@ -611,6 +773,7 @@ def index():
                             ),
                             rx.text(State.ranking_national_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
                             spacing="0", align_items="center", flex_grow="1",
+                            cursor="pointer", on_click=State.open_top10("national"),
                         ),
                         rx.divider(orientation="vertical", height="32px"),
                         # Région
@@ -622,6 +785,7 @@ def index():
                             ),
                             rx.text(State.ranking_region_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
                             spacing="0", align_items="center", flex_grow="1",
+                            cursor="pointer", on_click=State.open_top10("region"),
                         ),
                         rx.divider(orientation="vertical", height="32px"),
                         # Département
@@ -633,6 +797,7 @@ def index():
                             ),
                             rx.text(State.ranking_dept_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
                             spacing="0", align_items="center", flex_grow="1",
+                            cursor="pointer", on_click=State.open_top10("dept"),
                         ),
                         width="100%", align="center",
                     ),
