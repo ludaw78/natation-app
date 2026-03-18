@@ -9,7 +9,6 @@ import numpy as np
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, Union
-from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 
 # ── 1. PARSEUR ───────────────────────────────────────────────────────────────
@@ -245,6 +244,7 @@ def flag_svg():
 class State(rx.State):
     current_bassin: str = "50m"
     current_tab: str = "nl"
+    selected_nage_state: str = ""
     results_json: str = rx.LocalStorage("[]", name="swim_v92")
     last_update_str_store: str = rx.LocalStorage("0", name="up_v92")
     loading: bool = False
@@ -261,18 +261,14 @@ class State(rx.State):
 
     def on_load(self): return rx.console_log("v90")
 
-    @rx.var
+    @rx.var(cache=True)
     def selected_nage(self) -> str:
-        try:
-            import urllib.parse
-            params = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(self.router.url).query))
-            return params.get("nage", "")
-        except: return ""
+        return self.selected_nage_state
 
     def change_bassin(self, v: Union[str, list[str]]):
         self.current_bassin = v[0] if isinstance(v, list) else v
 
-    @rx.var
+    @rx.var(cache=True)
     def current_category(self) -> str: return f"U{current_season_year() - BIRTH_YEAR}"
 
     def to_sec(self, t):
@@ -294,12 +290,12 @@ class State(rx.State):
         type_n = "NL" if "NL" in n or "LIBRE" in n else "Bra" if "BRA" in n else "Dos" if "DOS" in n else "Pap" if "PAP" in n else "4 N" if "4 N" in n else ""
         return f"{dist} {type_n}".strip()
 
-    @rx.var
+    @rx.var(cache=True)
     def qualif_time_val(self) -> str:
         if self.current_bassin != "50m": return ""
         return GRILLE_QUALIF_FULL.get(self.current_category, {}).get(self.get_qualif_key(self.selected_nage), "")
 
-    @rx.var
+    @rx.var(cache=True)
     def qualif_time_formatted(self) -> str:
         """Formate le temps de qualif au même format que FFN : MM:SS.ss ou 00:SS.ss."""
         t = self.qualif_time_val
@@ -311,44 +307,44 @@ class State(rx.State):
             return f"{m:02d}:{s:05.2f}"
         except: return t
 
-    @rx.var
+    @rx.var(cache=True)
     def gap_to_qualif_txt(self) -> str:
         if not self.qualif_time_val or not self.best_time_val: return ""
         diff = self.to_sec(self.best_time_val) - self.to_sec(self.qualif_time_val)
         return "Qualifié ! 🎉" if diff <= 0 else f"+{diff:.2f}s (Cible {self.current_category})"
 
-    @rx.var
+    @rx.var(cache=True)
     def last_up_display(self) -> str:
         try:
             val = float(self.last_update_str_store)
             return f"MAJ : {datetime.fromtimestamp(val).strftime('%d/%m/%Y %H:%M')}" if val > 0 else ""
         except: return ""
 
-    @rx.var
+    @rx.var(cache=True)
     def current_results_list(self) -> list[Result]:
         try: return [Result(**r) for r in json.loads(self.results_json)]
         except: return []
 
-    @rx.var
+    @rx.var(cache=True)
     def available_nages(self) -> list[str]:
         return sorted(
             list({r.E for r in self.current_results_list if r.B == self.current_bassin}),
             key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 0,
         )
 
-    @rx.var
+    @rx.var(cache=True)
     def filtered_data(self) -> list[Result]:
         if not self.selected_nage: return []
         d = [r for r in self.current_results_list if r.E == self.selected_nage and r.B == self.current_bassin]
         return sorted(d, key=lambda x: datetime.strptime(x.D, "%d/%m/%Y"), reverse=True)
 
-    @rx.var
+    @rx.var(cache=True)
     def best_time_val(self) -> str:
         if not self.filtered_data: return ""
         try: return min(self.filtered_data, key=lambda x: self.to_sec(x.T)).T
         except: return ""
 
-    @rx.var
+    @rx.var(cache=True)
     def plot_fig(self) -> go.Figure:
         d = sorted(self.filtered_data, key=lambda x: datetime.strptime(x.D, "%d/%m/%Y"))
         if not d: return go.Figure()
@@ -376,7 +372,7 @@ class State(rx.State):
         )
         return f
 
-    @rx.var
+    @rx.var(cache=True)
     def splits_per_result(self) -> dict[str, list[SplitRow]]:
         out: dict[str, list[SplitRow]] = {}
         for r in self.filtered_data:
@@ -389,7 +385,7 @@ class State(rx.State):
             out[r.D + r.T] = rows
         return out
 
-    @rx.var
+    @rx.var(cache=True)
     def has_50m_splits(self) -> bool:
         """True si les splits de la nage sélectionnée commencent à 50m (pas 100m)."""
         for r in self.filtered_data:
@@ -401,7 +397,7 @@ class State(rx.State):
                     except: pass
         return False
 
-    @rx.var
+    @rx.var(cache=True)
     def dialog_has_50m_splits(self) -> bool:
         """True si les splits du dialog commencent à 50m (pas 100m)."""
         splits = self.dialog_splits
@@ -412,7 +408,7 @@ class State(rx.State):
         except:
             return False
 
-    @rx.var
+    @rx.var(cache=True)
     def dialog_splits(self) -> list[SplitRow]:
         """Splits du dialog ouvert. Si 16 splits (800m 25m), filtre aux multiples de 100m."""
         all_splits = self.splits_per_result.get(self.dialog_key, [])
@@ -430,12 +426,12 @@ class State(rx.State):
     def close_dialog(self):
         self.dialog_open = False
 
-    @rx.var
+    @rx.var(cache=True)
     def current_rankings(self) -> dict:
         try: return json.loads(self.rankings_json)
         except: return {}
 
-    @rx.var
+    @rx.var(cache=True)
     def selected_nage_rankings(self) -> dict:
         """Classements pour la nage+bassin sélectionnée."""
         # Normaliser : "50 Bra." -> "50 Bra", "200 Pap." -> "200 Pap"
@@ -491,23 +487,23 @@ class State(rx.State):
             self.loading = False
             yield
 
-    @rx.var
+    @rx.var(cache=True)
     def ranking_national_txt(self) -> str:
         return self.selected_nage_rankings.get("national", "-")
 
-    @rx.var
+    @rx.var(cache=True)
     def ranking_region_txt(self) -> str:
         return self.selected_nage_rankings.get("region", "-")
 
-    @rx.var
+    @rx.var(cache=True)
     def ranking_dept_txt(self) -> str:
         return self.selected_nage_rankings.get("dept", "-")
 
-    @rx.var
+    @rx.var(cache=True)
     def ranking_title(self) -> str:
         return f"Classement {current_season_year()} U{current_season_year() - BIRTH_YEAR}"
 
-    @rx.var
+    @rx.var(cache=True)
     def top10_dialog_data(self) -> list[Top10Entry]:
         try:
             d = json.loads(self.top10_json)
@@ -531,8 +527,11 @@ class State(rx.State):
     def change_tab(self, tab: str):
         self.current_tab = tab
 
-    def nav_to_nage(self, n): return rx.redirect(f"/?nage={n}")
-    def nav_back(self): return rx.redirect("/")
+    def nav_to_nage(self, n: str):
+        self.selected_nage_state = n
+
+    def nav_back(self):
+        self.selected_nage_state = ""
 
 # ── 5. COMPOSANTS UI ─────────────────────────────────────────────────────────
 
@@ -710,17 +709,13 @@ def index():
                             rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("4 N"), rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="4n"),
                             min_height="350px", width="100%",
                         ),
-                        value=State.current_tab,
-                        on_change=State.change_tab,
-                        width="100%",
+                        default_value="nl", width="100%",
                     ),
                     width="100%", align_items="start", spacing="0",
                 ),
                 rx.text(State.last_up_display, font_size="0.7em", color=rx.color("gray", 10)),
-                spacing="5", padding="1.2em", border_radius="20px",
+                spacing="5", padding="1.2em",
                 width=["98%", "420px"],
-                background_color=rx.color("gray", 1),
-                border="1px solid var(--gray-4)",
                 margin_bottom="5em",
             ),
             # ── Page détail nage ─────────────────────────────────────
