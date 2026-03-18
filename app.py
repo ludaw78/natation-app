@@ -529,6 +529,12 @@ class State(rx.State):
 
     def nav_to_nage(self, n: str):
         self.selected_nage_state = n
+        n_up = n.upper()
+        if "BRA" in n_up: self.current_tab = "br"
+        elif "PAP" in n_up: self.current_tab = "pp"
+        elif "DOS" in n_up: self.current_tab = "ds"
+        elif "4 N" in n_up: self.current_tab = "4n"
+        else: self.current_tab = "nl"
 
     def nav_back(self):
         self.selected_nage_state = ""
@@ -709,7 +715,9 @@ def index():
                             rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("4 N"), rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="4n"),
                             min_height="350px", width="100%",
                         ),
-                        default_value="nl", width="100%",
+                        value=State.current_tab,
+                        on_change=State.change_tab,
+                        width="100%",
                     ),
                     width="100%", align_items="start", spacing="0",
                 ),
