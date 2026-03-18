@@ -9,6 +9,7 @@ import numpy as np
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, Union
+from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 
 # ── 1. PARSEUR ───────────────────────────────────────────────────────────────
@@ -218,22 +219,19 @@ def _fetch_url(url: str) -> str:
     with opener.open(req, timeout=15) as resp:
         return resp.read().decode("utf-8", errors="replace")
 
-def _fetch_ranking_task(args: tuple) -> tuple:
-    """Tâche parallélisable : fetche les 3 URLs d'une épreuve+bassin."""
-    bc, bl, epr_name, idepr, sai, cat = args
+def _fetch_one(args: tuple) -> tuple:
+    """Fetche une seule URL — 108 tâches indépendantes en parallèle."""
+    bc, bl, epr_name, idepr, sai, cat, scope = args
     base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}"
+    suffix = {"dept": "&iddep=1611", "region": "&idreg=3004", "national": ""}[scope]
     try:
-        h = _fetch_url(base + "&iddep=1611")
-        rank    = parse_ranking_row(h)
-        top_dep = parse_top10(h)
+        h = _fetch_url(base + suffix)
+        rank = parse_ranking_row(h) if scope == "dept" else None
+        top  = parse_top10(h)
+        return (bl, epr_name, scope, rank, top)
     except:
-        rank    = {"dept": "-", "region": "-", "national": "-"}
-        top_dep = []
-    try:    top_nat  = parse_top10(_fetch_url(base))
-    except: top_nat  = []
-    try:    top_aura = parse_top10(_fetch_url(base + "&idreg=3004"))
-    except: top_aura = []
-    return (bl, epr_name, rank, top_dep, top_nat, top_aura)
+        fallback_rank = {"dept": "-", "region": "-", "national": "-"} if scope == "dept" else None
+        return (bl, epr_name, scope, fallback_rank, [])
 
 def flag_svg():
     return rx.box(
@@ -253,13 +251,14 @@ class State(rx.State):
     top10_dialog_open: bool = False
     top10_dialog_title: str = ""
     top10_dialog_key: str = ""
+    top10_loading: bool = False
     dialog_open: bool = False
     dialog_key:  str = ""
     dialog_lieu: str = ""
     dialog_type: str = ""
     dialog_date: str = ""
 
-    def on_load(self): return rx.console_log("v90")
+    def on_load(self): pass
 
     @rx.var(cache=True)
     def selected_nage(self) -> str:
@@ -317,7 +316,10 @@ class State(rx.State):
     def last_up_display(self) -> str:
         try:
             val = float(self.last_update_str_store)
-            return f"MAJ : {datetime.fromtimestamp(val).strftime('%d/%m/%Y %H:%M')}" if val > 0 else ""
+            if val <= 0: return ""
+            from datetime import timezone
+            dt = datetime.fromtimestamp(val, tz=timezone.utc).astimezone()
+            return f"MAJ : {dt.strftime('%d/%m/%Y %H:%M')}"
         except: return ""
 
     @rx.var(cache=True)
@@ -450,7 +452,7 @@ class State(rx.State):
         cat = sai - BIRTH_YEAR
 
         try:
-            # ── 1. Performances (séquentiel, 2 requêtes) ─────────────
+            # ── 1. Performances ──────────────────────────────────────
             for bc, bl in [("25", "25m"), ("50", "50m")]:
                 url = f"https://ffn.extranat.fr/webffn/nat_recherche.php?idact=nat&idrch_id=3518107&idopt=prf&idbas={bc}"
                 html_content = _fetch_url(url)
@@ -467,22 +469,23 @@ class State(rx.State):
             self.last_update_str_store = str(time.time())
             yield
 
-            # ── 2+3. Classements + top10 en parallèle (108 requêtes) ─
-            tasks = [
-                (bc, bl, epr_name, idepr, sai, cat)
+            # ── 2. Classements Isère uniquement (36 requêtes) ────────
+            tasks_isere = [
+                (bc, bl, epr_name, idepr, sai, cat, "dept")
                 for bc, bl in [("25", "25m"), ("50", "50m")]
                 for epr_name, idepr in EPREUVE_CODES.items()
             ]
-            with ThreadPoolExecutor(max_workers=10) as ex:
-                for bl, epr_name, rank, top_dep, top_nat, top_aura in ex.map(_fetch_ranking_task, tasks):
+            all_top10 = {}
+            with ThreadPoolExecutor(max_workers=12) as ex:
+                for bl, epr_name, scope, rank, top in ex.map(_fetch_one, tasks_isere):
                     all_ranks[f"{epr_name}|{bl}"]          = rank
-                    all_top10[f"{epr_name}|{bl}|dept"]     = top_dep
-                    all_top10[f"{epr_name}|{bl}|national"] = top_nat
-                    all_top10[f"{epr_name}|{bl}|region"]   = top_aura
+                    all_top10[f"{epr_name}|{bl}|dept"]     = top
 
             self.rankings_json = json.dumps(all_ranks)
             self.top10_json    = json.dumps(all_top10)
 
+        except Exception as e:
+            print(f"[force_refresh] ERREUR: {type(e).__name__}: {e}")
         finally:
             self.loading = False
             yield
@@ -513,13 +516,40 @@ class State(rx.State):
             return []
 
     def open_top10(self, scope: str):
-        """scope: 'national', 'region', 'dept'"""
+        """scope: 'national', 'region', 'dept' — France+AURA chargés à la demande."""
         nage = self.selected_nage.rstrip(".")
         self.top10_dialog_key = f"{nage}|{self.current_bassin}|{scope}"
         labels = {"national": "France", "region": "AURA", "dept": "Isère"}
         cat = current_season_year() - BIRTH_YEAR
         self.top10_dialog_title = f"Top 10 {labels[scope]} U{cat} — {nage} ({self.current_bassin})"
         self.top10_dialog_open = True
+        # dept déjà chargé au refresh — France/AURA à la demande
+        if scope == "dept":
+            return
+        # Vérifier si déjà en cache
+        all_top10 = json.loads(self.top10_json) if self.top10_json not in ("{}", "") else {}
+        if f"{nage}|{self.current_bassin}|{scope}" in all_top10:
+            return
+        self.top10_loading = True
+        yield
+        idepr = EPREUVE_CODES.get(nage, None)
+        if idepr is None:
+            self.top10_loading = False
+            return
+        sai = current_season_year()
+        cat_val = sai - BIRTH_YEAR
+        bc = "50" if self.current_bassin == "50m" else "25"
+        bl = self.current_bassin
+        # Charger France + AURA en parallèle
+        tasks = [
+            (bc, bl, nage, idepr, sai, cat_val, s)
+            for s in ["national", "region"]
+        ]
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            for _, epr_name, s, _, top in ex.map(_fetch_one, tasks):
+                all_top10[f"{epr_name}|{bl}|{s}"] = top
+        self.top10_json = json.dumps(all_top10)
+        self.top10_loading = False
 
     def close_top10(self):
         self.top10_dialog_open = False
@@ -575,12 +605,16 @@ def top10_dialog() -> rx.Component:
                 ),
                 rx.divider(),
                 rx.cond(
-                    State.top10_dialog_data.length() > 0,
-                    rx.vstack(
-                        rx.foreach(State.top10_dialog_data, top10_row_ui),
-                        spacing="1", width="100%",
+                    State.top10_loading,
+                    rx.center(rx.spinner(size="3"), padding="20px"),
+                    rx.cond(
+                        State.top10_dialog_data.length() > 0,
+                        rx.vstack(
+                            rx.foreach(State.top10_dialog_data, top10_row_ui),
+                            spacing="1", width="100%",
+                        ),
+                        rx.text("Aucune donnée", font_size="0.8em", color=rx.color("gray", 10)),
                     ),
-                    rx.text("Aucune donnée", font_size="0.8em", color=rx.color("gray", 10)),
                 ),
                 spacing="3", width="100%",
             ),
