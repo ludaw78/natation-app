@@ -247,7 +247,7 @@ class State(rx.State):
     last_update_str_store: str = rx.LocalStorage("0", name="up_v92")
     loading: bool = False
     rankings_json: str = rx.LocalStorage("{}", name="rank_v95")
-    top10_json: str = rx.LocalStorage("{}", name="top10_v3")
+    top10_json: str = "{}"
     top10_dialog_open: bool = False
     top10_dialog_title: str = ""
     top10_dialog_key: str = ""
@@ -257,6 +257,7 @@ class State(rx.State):
     dialog_lieu: str = ""
     dialog_type: str = ""
     dialog_date: str = ""
+    dialog_splits_data: list[SplitRow] = []
 
     def on_load(self): pass
 
@@ -375,54 +376,33 @@ class State(rx.State):
         return f
 
     @rx.var(cache=True)
-    def splits_per_result(self) -> dict[str, list[SplitRow]]:
-        out: dict[str, list[SplitRow]] = {}
-        for r in self.filtered_data:
-            rows: list[SplitRow] = []
-            if r.S:
-                for seg in r.S.split(SEP_SPLIT):
-                    parts = seg.split(SEP_CHAMP)
-                    if len(parts) == 4:
-                        rows.append(SplitRow(dist=parts[0]+"m", cumul=parts[1], partiel=parts[2], half=parts[3]))
-            out[r.D + r.T] = rows
-        return out
-
-    @rx.var(cache=True)
-    def has_50m_splits(self) -> bool:
-        """True si les splits de la nage sélectionnée commencent à 50m (pas 100m)."""
-        for r in self.filtered_data:
-            if r.S:
-                first_seg = r.S.split(SEP_SPLIT)[0]
-                parts = first_seg.split(SEP_CHAMP)
-                if len(parts) >= 1:
-                    try: return int(parts[0]) == 50
-                    except: pass
-        return False
-
-    @rx.var(cache=True)
     def dialog_has_50m_splits(self) -> bool:
-        """True si les splits du dialog commencent à 50m (pas 100m)."""
-        splits = self.dialog_splits
-        if not splits:
-            return False
-        try:
-            return int(splits[0].dist.replace("m", "")) == 50
-        except:
-            return False
+        if not self.dialog_splits_data: return False
+        try: return int(self.dialog_splits_data[0].dist.replace("m", "")) == 50
+        except: return False
 
     @rx.var(cache=True)
     def dialog_splits(self) -> list[SplitRow]:
-        """Splits du dialog ouvert. Si 16 splits (800m 25m), filtre aux multiples de 100m."""
-        all_splits = self.splits_per_result.get(self.dialog_key, [])
-        if len(all_splits) == 16:
-            return [s for s in all_splits if int(s.dist.replace("m", "")) % 100 == 0]
-        return all_splits
+        splits = self.dialog_splits_data
+        if len(splits) == 16:
+            return [s for s in splits if int(s.dist.replace("m", "")) % 100 == 0]
+        return splits
 
     def open_dialog(self, key: str, lieu: str, type_compet: str, date: str):
         self.dialog_key  = key
         self.dialog_lieu = lieu
         self.dialog_type = type_compet
         self.dialog_date = date
+        # Parser les splits uniquement pour ce résultat
+        rows: list[SplitRow] = []
+        for r in self.filtered_data:
+            if r.D + r.T == key and r.S:
+                for seg in r.S.split(SEP_SPLIT):
+                    parts = seg.split(SEP_CHAMP)
+                    if len(parts) == 4:
+                        rows.append(SplitRow(dist=parts[0]+"m", cumul=parts[1], partiel=parts[2], half=parts[3]))
+                break
+        self.dialog_splits_data = rows
         self.dialog_open = True
 
     def close_dialog(self):
@@ -732,26 +712,54 @@ def index():
                 ),
                 rx.vstack(
                     rx.text("Nage", style=l_style),
-                    rx.tabs.root(
-                        rx.tabs.list(
-                            rx.tabs.trigger("NL",   value="nl",  flex_grow="1"),
-                            rx.tabs.trigger("Bra.", value="br",  flex_grow="1"),
-                            rx.tabs.trigger("Pap.", value="pp",  flex_grow="1"),
-                            rx.tabs.trigger("Dos",  value="ds",  flex_grow="1"),
-                            rx.tabs.trigger("4N",   value="4n",  flex_grow="1"),
+                    rx.cond(
+                        State.available_nages.length() > 0,
+                        rx.tabs.root(
+                            rx.tabs.list(
+                                rx.tabs.trigger("NL",   value="nl",  flex_grow="1"),
+                                rx.tabs.trigger("Bra.", value="br",  flex_grow="1"),
+                                rx.tabs.trigger("Pap.", value="pp",  flex_grow="1"),
+                                rx.tabs.trigger("Dos",  value="ds",  flex_grow="1"),
+                                rx.tabs.trigger("4N",   value="4n",  flex_grow="1"),
+                                width="100%",
+                            ),
+                            rx.box(
+                                rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("NL") | n.contains("Libre"), rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="nl"),
+                                rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("Bra"),  rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="br"),
+                                rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("Pap"),  rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="pp"),
+                                rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("Dos"),  rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="ds"),
+                                rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("4 N"), rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="4n"),
+                                min_height="350px", width="100%",
+                            ),
+                            value=State.current_tab,
+                            on_change=State.change_tab,
                             width="100%",
                         ),
-                        rx.box(
-                            rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("NL") | n.contains("Libre"), rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="nl"),
-                            rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("Bra"),  rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="br"),
-                            rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("Pap"),  rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="pp"),
-                            rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("Dos"),  rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="ds"),
-                            rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("4 N"), rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="4n"),
+                        rx.center(
+                            rx.html('''
+                                <style>
+                                    @keyframes swim {
+                                        0%   { transform: translateX(-40px) scaleX(-1); }
+                                        49%  { transform: translateX(40px) scaleX(-1); }
+                                        50%  { transform: translateX(40px) scaleX(1); }
+                                        99%  { transform: translateX(-40px) scaleX(1); }
+                                        100% { transform: translateX(-40px) scaleX(-1); }
+                                    }
+                                    @keyframes wave {
+                                        0%   { transform: translateX(0); }
+                                        100% { transform: translateX(-50%); }
+                                    }
+                                    .swimmer { animation: swim 2s ease-in-out infinite; display:inline-block; font-size:2em; }
+                                    .wave-wrap { overflow:hidden; width:120px; }
+                                    .wave-txt { animation: wave 1.2s linear infinite; white-space:nowrap; font-size:1em; color:#3b82f6; }
+                                </style>
+                                <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+                                    <div class="swimmer">🏊‍♂️</div>
+                                    <div class="wave-wrap"><div class="wave-txt">〰〰〰〰〰〰〰〰</div></div>
+                                </div>
+                            '''),
                             min_height="350px", width="100%",
                         ),
-                        value=State.current_tab,
-                        on_change=State.change_tab,
-                        width="100%",
                     ),
                     width="100%", align_items="start", spacing="0",
                 ),
