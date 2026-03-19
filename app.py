@@ -496,16 +496,13 @@ class State(rx.State):
             return []
 
     def open_top10(self, scope: str):
-        """scope: 'national', 'region', 'dept' — France+AURA chargés à la demande."""
+        """scope: 'national', 'region', 'dept' — chargé à la demande en parallèle."""
         nage = self.selected_nage.rstrip(".")
         self.top10_dialog_key = f"{nage}|{self.current_bassin}|{scope}"
         labels = {"national": "France", "region": "AURA", "dept": "Isère"}
         cat = current_season_year() - BIRTH_YEAR
         self.top10_dialog_title = f"Top 10 {labels[scope]} U{cat} — {nage} ({self.current_bassin})"
         self.top10_dialog_open = True
-        # dept déjà chargé au refresh — France/AURA à la demande
-        if scope == "dept":
-            return
         # Vérifier si déjà en cache
         all_top10 = json.loads(self.top10_json) if self.top10_json not in ("{}", "") else {}
         if f"{nage}|{self.current_bassin}|{scope}" in all_top10:
@@ -520,12 +517,13 @@ class State(rx.State):
         cat_val = sai - BIRTH_YEAR
         bc = "50" if self.current_bassin == "50m" else "25"
         bl = self.current_bassin
-        # Charger France + AURA en parallèle
-        tasks = [
-            (bc, bl, nage, idepr, sai, cat_val, s)
-            for s in ["national", "region"]
-        ]
-        with ThreadPoolExecutor(max_workers=2) as ex:
+        scopes_to_fetch = {
+            "dept":     ["dept"],
+            "national": ["national"],
+            "region":   ["region"],
+        }[scope]
+        tasks = [(bc, bl, nage, idepr, sai, cat_val, s) for s in scopes_to_fetch]
+        with ThreadPoolExecutor(max_workers=3) as ex:
             for _, epr_name, s, _, top in ex.map(_fetch_one, tasks):
                 all_top10[f"{epr_name}|{bl}|{s}"] = top
         self.top10_json = json.dumps(all_top10)
