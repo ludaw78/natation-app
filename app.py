@@ -247,7 +247,7 @@ class State(rx.State):
     last_update_str_store: str = rx.LocalStorage("0", name="up_v92")
     loading: bool = False
     rankings_json: str = rx.LocalStorage("{}", name="rank_v95")
-    top10_json: str = "{}"
+    top10_json: str = rx.LocalStorage("{}", name="top10_v4")
     top10_dialog_open: bool = False
     top10_dialog_title: str = ""
     top10_dialog_key: str = ""
@@ -883,5 +883,15 @@ def index():
         appearance="inherit",
     )
 
-app = rx.App(theme=rx.theme(appearance="inherit"))
+app = rx.App(
+    theme=rx.theme(appearance="inherit"),
+    head_components=[
+        rx.el.link(rel="icon", type="image/png", href="/icon.png"),
+        rx.el.link(rel="apple-touch-icon", sizes="512x512", href="/icon.png"),
+        rx.el.meta(name="apple-mobile-web-app-capable", content="yes"),
+        rx.el.meta(name="apple-mobile-web-app-status-bar-style", content="default"),
+        rx.el.meta(name="apple-mobile-web-app-title", content="Tristan Swim"),
+        rx.el.meta(name="mobile-web-app-capable", content="yes"),
+    ],
+)
 app.add_page(index, route="/", on_load=State.on_load)
