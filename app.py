@@ -270,6 +270,7 @@ class State(rx.State):
 
     def change_bassin(self, v: Union[str, list[str]]):
         self.current_bassin = v[0] if isinstance(v, list) else v
+        return rx.call_script("window.scrollTo({top: 0, behavior: 'instant'})")
 
     @rx.var(cache=True)
     def current_category(self) -> str: return f"U{current_season_year() - BIRTH_YEAR}"
@@ -796,7 +797,6 @@ def index():
                 rx.text(State.last_up_display, font_size="0.7em", color=rx.color("gray", 10)),
                 spacing="5", padding="1.2em",
                 width=["98%", "420px"],
-                margin_bottom="5em",
             ),
             # ── Page détail nage ─────────────────────────────────────
             rx.vstack(
@@ -811,10 +811,10 @@ def index():
                     width="100%", align="center",
                 ),
                 rx.segmented_control.root(
-                    rx.segmented_control.item("25m", value="25m"),
-                    rx.segmented_control.item("50m", value="50m"),
-                    on_change=State.change_bassin, value=State.current_bassin, width="100%",
-                ),
+                        rx.segmented_control.item("25m", value="25m"),
+                        rx.segmented_control.item("50m", value="50m"),
+                        on_change=State.change_bassin, value=State.current_bassin, width="100%",
+                    ),
                 rx.hstack(
                     rx.badge(f"RECORD : {State.best_time_val}", color_scheme="blue", variant="solid", size="3", flex_grow="1"),
                     rx.cond(
@@ -928,7 +928,7 @@ def index():
                 spacing="4", width=["98%", "500px"], padding="0.8em", margin_bottom="5em",
             ),
         ),
-        min_height="100vh",
+        min_height="0",
         ),
         appearance="inherit",
     )
