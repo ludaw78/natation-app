@@ -245,7 +245,6 @@ def flag_svg():
 
 class State(rx.State):
     current_bassin: str = "50m"
-    current_tab: str = "nl"
     selected_nage_state: str = ""
     results_json: str = rx.LocalStorage("[]", name="swim_v92")
     last_update_str_store: str = rx.LocalStorage("0", name="up_v92")
@@ -338,6 +337,26 @@ class State(rx.State):
             list({r.E for r in self.current_results_list if r.B == self.current_bassin}),
             key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 0,
         )
+
+    @rx.var(cache=True)
+    def nages_nl(self) -> list[str]:
+        return [n for n in self.available_nages if "NL" in n.upper() or "LIBRE" in n.upper()]
+
+    @rx.var(cache=True)
+    def nages_bra(self) -> list[str]:
+        return [n for n in self.available_nages if "BRA" in n.upper()]
+
+    @rx.var(cache=True)
+    def nages_pap(self) -> list[str]:
+        return [n for n in self.available_nages if "PAP" in n.upper()]
+
+    @rx.var(cache=True)
+    def nages_dos(self) -> list[str]:
+        return [n for n in self.available_nages if "DOS" in n.upper()]
+
+    @rx.var(cache=True)
+    def nages_4n(self) -> list[str]:
+        return [n for n in self.available_nages if "4 N" in n.upper()]
 
     @rx.var(cache=True)
     def filtered_data(self) -> list[Result]:
@@ -563,17 +582,8 @@ class State(rx.State):
     def close_top10(self):
         self.top10_dialog_open = False
 
-    def change_tab(self, tab: str):
-        self.current_tab = tab
-
     def nav_to_nage(self, n: str):
         self.selected_nage_state = n
-        n_up = n.upper()
-        if "BRA" in n_up: self.current_tab = "br"
-        elif "PAP" in n_up: self.current_tab = "pp"
-        elif "DOS" in n_up: self.current_tab = "ds"
-        elif "4 N" in n_up: self.current_tab = "4n"
-        else: self.current_tab = "nl"
 
     def nav_back(self):
         self.selected_nage_state = ""
@@ -743,26 +753,17 @@ def index():
                     rx.text("Nage", style=l_style),
                     rx.cond(
                         State.available_nages.length() > 0,
-                        rx.tabs.root(
-                            rx.tabs.list(
-                                rx.tabs.trigger("NL",   value="nl",  flex_grow="1"),
-                                rx.tabs.trigger("Bra.", value="br",  flex_grow="1"),
-                                rx.tabs.trigger("Pap.", value="pp",  flex_grow="1"),
-                                rx.tabs.trigger("Dos",  value="ds",  flex_grow="1"),
-                                rx.tabs.trigger("4N",   value="4n",  flex_grow="1"),
-                                width="100%",
-                            ),
-                            rx.box(
-                                rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("NL") | n.contains("Libre"), rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="nl"),
-                                rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("Bra"),  rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="br"),
-                                rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("Pap"),  rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="pp"),
-                                rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("Dos"),  rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="ds"),
-                                rx.tabs.content(rx.grid(rx.foreach(State.available_nages, lambda n: rx.cond(n.contains("4 N"), rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%"))), columns="2", spacing="2", padding_y="10px"), value="4n"),
-                                min_height="350px", width="100%",
-                            ),
-                            value=State.current_tab,
-                            on_change=State.change_tab,
-                            width="100%",
+                        rx.vstack(
+                            rx.grid(rx.foreach(State.nages_nl, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                            rx.divider(),
+                            rx.grid(rx.foreach(State.nages_bra, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                            rx.divider(),
+                            rx.grid(rx.foreach(State.nages_pap, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                            rx.divider(),
+                            rx.grid(rx.foreach(State.nages_dos, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                            rx.divider(),
+                            rx.grid(rx.foreach(State.nages_4n, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                            spacing="2", width="100%",
                         ),
                         rx.center(
                             rx.html('''
@@ -787,10 +788,10 @@ def index():
                                     <div class="wave-wrap"><div class="wave-txt">〰〰〰〰〰〰〰〰</div></div>
                                 </div>
                             '''),
-                            min_height="350px", width="100%",
+                            min_height="200px", width="100%",
                         ),
                     ),
-                    width="100%", align_items="start", spacing="0",
+                    width="100%", align_items="start", spacing="1",
                 ),
                 rx.text(State.last_up_display, font_size="0.7em", color=rx.color("gray", 10)),
                 spacing="5", padding="1.2em",
