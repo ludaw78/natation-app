@@ -148,8 +148,9 @@ def current_season_year() -> int:
     return datetime.now().year
 
 def parse_ranking_row(html_content: str, swimmer_id: str = "3518107") -> dict:
-    """Extrait les rangs dept/région/national par catégorie depuis la page de classement FFN."""
-    result = {"dept": "-", "region": "-", "national": "-"}
+    """Extrait les 6 rangs (par cat + TC) depuis la page de classement FFN."""
+    result = {"dept": "-", "region": "-", "national": "-",
+              "dept_tc": "-", "region_tc": "-", "national_tc": "-"}
     rows = find_all(r"<tr[^>]*>(.*?)</tr>", html_content)
     target_row = next((r for r in rows if swimmer_id in r), None)
     if not target_row:
@@ -168,9 +169,12 @@ def parse_ranking_row(html_content: str, swimmer_id: str = "3518107") -> dict:
         clean = re.sub(r"<[^>]+>", "", m.group(1)).strip()
         return clean.split(" : ")[0].strip()
 
-    result["national"] = extract_rank(r"Rang national par cat[^→]*→\s*<b>(.*?)</b>")
-    result["region"]   = extract_rank(r"Rang r[ée]gional[^→]*par cat[^→]*→\s*<b>(.*?)</b>")
-    result["dept"]     = extract_rank(r"Rang d[ée]part[^→]*par cat[^→]*→\s*<b>(.*?)</b>")
+    result["national"]    = extract_rank(r"Rang national par cat[^→]*→\s*<b>(.*?)</b>")
+    result["region"]      = extract_rank(r"Rang r[ée]gional[^→]*par cat[^→]*→\s*<b>(.*?)</b>")
+    result["dept"]        = extract_rank(r"Rang d[ée]part[^→]*par cat[^→]*→\s*<b>(.*?)</b>")
+    result["national_tc"] = extract_rank(r"Rang national toutes cat[^→]*→\s*<b>(.*?)</b>")
+    result["region_tc"]   = extract_rank(r"Rang r[ée]gional[^→]*toutes cat[^→]*→\s*<b>(.*?)</b>")
+    result["dept_tc"]     = extract_rank(r"Rang d[ée]part[^→]*toutes cat[^→]*→\s*<b>(.*?)</b>")
     return result
 
 def parse_top10(html_content: str, swimmer_id: str = "3518107") -> list:
@@ -246,7 +250,7 @@ class State(rx.State):
     results_json: str = rx.LocalStorage("[]", name="swim_v92")
     last_update_str_store: str = rx.LocalStorage("0", name="up_v92")
     loading: bool = False
-    rankings_json: str = rx.LocalStorage("{}", name="rank_v95")
+    rankings_json: str = rx.LocalStorage("{}", name="rank_v96")
     top10_json: str = rx.LocalStorage("{}", name="top10_v4")
     top10_dialog_open: bool = False
     top10_dialog_title: str = ""
@@ -483,8 +487,20 @@ class State(rx.State):
         return self.selected_nage_rankings.get("dept", "-")
 
     @rx.var(cache=True)
+    def ranking_national_tc_txt(self) -> str:
+        return self.selected_nage_rankings.get("national_tc", "-")
+
+    @rx.var(cache=True)
+    def ranking_region_tc_txt(self) -> str:
+        return self.selected_nage_rankings.get("region_tc", "-")
+
+    @rx.var(cache=True)
+    def ranking_dept_tc_txt(self) -> str:
+        return self.selected_nage_rankings.get("dept_tc", "-")
+
+    @rx.var(cache=True)
     def ranking_title(self) -> str:
-        return f"Classement {current_season_year()} U{current_season_year() - BIRTH_YEAR}"
+        return f"Classement {current_season_year()}"
 
     @rx.var(cache=True)
     def top10_dialog_data(self) -> list[Top10Entry]:
@@ -496,12 +512,15 @@ class State(rx.State):
             return []
 
     def open_top10(self, scope: str):
-        """scope: 'national', 'region', 'dept' — chargé à la demande en parallèle."""
+        """scope: 'national','region','dept','national_tc','region_tc','dept_tc'"""
         nage = self.selected_nage.rstrip(".")
         self.top10_dialog_key = f"{nage}|{self.current_bassin}|{scope}"
+        tc = scope.endswith("_tc")
+        base_scope = scope.replace("_tc", "")
         labels = {"national": "France", "region": "AURA", "dept": "Isère"}
         cat = current_season_year() - BIRTH_YEAR
-        self.top10_dialog_title = f"Top 10 {labels[scope]} U{cat} — {nage} ({self.current_bassin})"
+        suffix = " TC" if tc else f" U{cat}"
+        self.top10_dialog_title = f"Top 10 {labels[base_scope]}{suffix} — {nage} ({self.current_bassin})"
         self.top10_dialog_open = True
         # Vérifier si déjà en cache
         all_top10 = json.loads(self.top10_json) if self.top10_json not in ("{}", "") else {}
@@ -517,15 +536,27 @@ class State(rx.State):
         cat_val = sai - BIRTH_YEAR
         bc = "50" if self.current_bassin == "50m" else "25"
         bl = self.current_bassin
-        scopes_to_fetch = {
-            "dept":     ["dept"],
-            "national": ["national"],
-            "region":   ["region"],
-        }[scope]
-        tasks = [(bc, bl, nage, idepr, sai, cat_val, s) for s in scopes_to_fetch]
-        with ThreadPoolExecutor(max_workers=3) as ex:
-            for _, epr_name, s, _, top in ex.map(_fetch_one, tasks):
-                all_top10[f"{epr_name}|{bl}|{s}"] = top
+        # URL de base — TC = sans idcat
+        if tc:
+            base_url = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}"
+            suffix_map = {"national_tc": "", "region_tc": "&idreg=3004", "dept_tc": "&iddep=1611"}
+            url = base_url + suffix_map[scope]
+            try:
+                h = _fetch_url(url)
+                top = parse_top10(h)
+                all_top10[f"{nage}|{bl}|{scope}"] = top
+            except:
+                all_top10[f"{nage}|{bl}|{scope}"] = []
+        else:
+            base_url = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat_val}"
+            suffix_map = {"national": "", "region": "&idreg=3004", "dept": "&iddep=1611"}
+            url = base_url + suffix_map[scope]
+            try:
+                h = _fetch_url(url)
+                top = parse_top10(h)
+                all_top10[f"{nage}|{bl}|{scope}"] = top
+            except:
+                all_top10[f"{nage}|{bl}|{scope}"] = []
         self.top10_json = json.dumps(all_top10)
         self.top10_loading = False
 
@@ -802,47 +833,65 @@ def index():
                 # ── Classements ──────────────────────────────────────
                 rx.vstack(
                     rx.text(State.ranking_title, font_size="0.72em", font_weight="bold", color=rx.color("gray", 11)),
-                    rx.hstack(
-                        # France
-                        rx.vstack(
-                            rx.hstack(
-                                rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'),
-                                rx.text("France", font_size="0.7em", color=rx.color("gray", 11)),
-                                spacing="1", align="center",
-                            ),
-                            rx.text(State.ranking_national_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
-                            spacing="0", align_items="center", flex_grow="1",
-                            cursor="pointer", on_click=State.open_top10("national"),
+                    rx.tabs.root(
+                        rx.tabs.list(
+                            rx.tabs.trigger(State.current_category, value="cat", flex_grow="1"),
+                            rx.tabs.trigger("TC", value="tc", flex_grow="1"),
+                            width="100%",
                         ),
-                        rx.divider(orientation="vertical", height="32px"),
-                        # Région
-                        rx.vstack(
+                        # Onglet par catégorie
+                        rx.tabs.content(
                             rx.hstack(
-                                rx.text("🏔", font_size="0.8em"),
-                                rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)),
-                                spacing="1", align="center",
+                                rx.vstack(
+                                    rx.hstack(rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'), rx.text("France", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                    rx.text(State.ranking_national_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
+                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("national"),
+                                ),
+                                rx.divider(orientation="vertical", height="32px"),
+                                rx.vstack(
+                                    rx.hstack(rx.text("🏔", font_size="0.8em"), rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                    rx.text(State.ranking_region_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
+                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("region"),
+                                ),
+                                rx.divider(orientation="vertical", height="32px"),
+                                rx.vstack(
+                                    rx.hstack(rx.text("📍", font_size="0.8em"), rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                    rx.text(State.ranking_dept_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
+                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("dept"),
+                                ),
+                                width="100%", align="center", padding_top="8px",
                             ),
-                            rx.text(State.ranking_region_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
-                            spacing="0", align_items="center", flex_grow="1",
-                            cursor="pointer", on_click=State.open_top10("region"),
+                            value="cat",
                         ),
-                        rx.divider(orientation="vertical", height="32px"),
-                        # Département
-                        rx.vstack(
+                        # Onglet toutes catégories
+                        rx.tabs.content(
                             rx.hstack(
-                                rx.text("📍", font_size="0.8em"),
-                                rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)),
-                                spacing="1", align="center",
+                                rx.vstack(
+                                    rx.hstack(rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'), rx.text("France", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                    rx.text(State.ranking_national_tc_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
+                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("national_tc"),
+                                ),
+                                rx.divider(orientation="vertical", height="32px"),
+                                rx.vstack(
+                                    rx.hstack(rx.text("🏔", font_size="0.8em"), rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                    rx.text(State.ranking_region_tc_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
+                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("region_tc"),
+                                ),
+                                rx.divider(orientation="vertical", height="32px"),
+                                rx.vstack(
+                                    rx.hstack(rx.text("📍", font_size="0.8em"), rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                    rx.text(State.ranking_dept_tc_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
+                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("dept_tc"),
+                                ),
+                                width="100%", align="center", padding_top="8px",
                             ),
-                            rx.text(State.ranking_dept_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
-                            spacing="0", align_items="center", flex_grow="1",
-                            cursor="pointer", on_click=State.open_top10("dept"),
+                            value="tc",
                         ),
-                        width="100%", align="center",
+                        default_value="cat", width="100%",
                     ),
-                    spacing="2", align_items="start",
+                    spacing="1", align_items="start",
                     width="100%",
-                    padding="10px 12px",
+                    padding="8px 12px",
                     border_radius="8px",
                     background_color=rx.color("gray", 2),
                     border="1px solid var(--gray-4)",
